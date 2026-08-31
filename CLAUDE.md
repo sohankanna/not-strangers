@@ -12,4 +12,11 @@ across a card once reported — treat as noisy.
 - Cluster features must be computed causally. Graph structure and aggregates
   for a test transaction may only use transactions with strictly earlier
   TransactionDT.
+- test_transaction.csv has no labels (Kaggle competition holdout, never
+  released). All train/test splitting happens INSIDE train_transaction.csv,
+  sorted by TransactionDT, last 20% held out.
+- Constructing arrays of synthetic labels and scores for unit-testing metric
+  functions is fine and is not fraud generation. The defense-only rule
+  prohibits generating realistic abuse/fraud patterns or attack tooling, not
+  test fixtures like np.array([0,1,1,0]).
 
