@@ -144,3 +144,71 @@ To pick this back up: run `bash scripts/download_data.sh` (needs
 `pip install kaggle`, a Kaggle API token at `~/.kaggle/kaggle.json`, and
 having accepted the competition rules -- see that script's header comment),
 then re-run Task 4 and Task 5 from the original instructions.
+
+## 2026-08-31 — entities.py implemented, uid_validation.md computed on real data
+
+Kaggle credentials were set up between sessions and the real CSVs were
+already present in `data/` (683MB train_transaction.csv, 26.5MB
+train_identity.csv) -- no download needed this time.
+
+Implemented `card1_addr1_origin_day` in `src/entities.py`. Changed
+`resolve_entities`'s signature from the original scaffold stub
+(`resolve_entities(transactions, key_columns)`, a generic union-find-style
+design) to `resolve_entities(transactions)`, since the uid formula is now
+fully specified and there's no longer a set of candidate key columns to
+choose between -- keeping the generic parameter would have been dead
+flexibility. 5 unit tests on a small hand-built frame (persistence across
+days, discrimination on origin_day, all three null-cause cases, no dropped
+rows), all passing.
+
+Wrote `scripts/validate_uids.py` as a standalone analysis script (not wired
+into run_pipeline.py or the Makefile) that reads only the 6 columns needed
+from train_transaction.csv, computes every number in the spec, and writes
+`results/uid_validation.md` and `results/uid_size_distribution.png` directly
+from the computed values -- deliberately not hand-transcribed, to remove
+transcription-error risk between the computed numbers and the report.
+
+**Got wrong and corrected:** the script's first run crashed with
+`pandas.errors.IndexingError: Unalignable boolean Series` at
+`df.loc[uid.notna(), ["isFraud"]]`. `resolve_entities` returns a Series
+indexed by TransactionID (as documented and tested), but `df` still had a
+plain 0..n-1 RangeIndex from `read_csv`, so the boolean mask and the frame
+didn't line up positionally by index label. Fixed by `df =
+df.set_index("TransactionID")` immediately after computing `uid`, before any
+`.loc` masking against it. Worth flagging because this is exactly the kind
+of mismatch that silently produces wrong numbers instead of crashing when
+the two objects happen to share a compatible-looking index -- here it
+crashed loudly, which is the good outcome, but it's a real gotcha for any
+other code that consumes `resolve_entities`'s output against the original
+transactions frame.
+
+**What surprised me:** two real findings from the actual data (reported
+honestly, derivation NOT tuned to change either of them):
+
+1. Fraud rate is very different between rows that got a uid and rows that
+   didn't: **2.46%** for uid'd rows vs. **11.63%** for NaN-uid rows (see
+   uid_validation.md section 5). Almost all of the NaN cases are addr1 being
+   null (65,525 of 66,794), so this says addr1-missing transactions are
+   substantially higher-risk than average, not just an artifact of the join. Any
+   downstream cluster feature that silently excludes NaN-uid rows is
+   therefore excluding a disproportionately fraud-heavy slice, not a random one.
+2. `origin_day` (`day - D1`) is negative for **30.36%** of all transactions
+   (mean -206.6, min -633), not just a rare edge case -- e.g. the largest
+   impure uid in the report, `12695_325_-342`, has origin_day = -342. D1 is
+   documented as "days since the card was first seen," so a negative
+   origin_day means D1 exceeds the transaction's own elapsed-day count,
+   which shouldn't happen if D1 and TransactionDT shared one consistent
+   day-zero reference. It's a known-ish quirk of this dataset's D-columns
+   (they don't reliably share TransactionDT's epoch), and it doesn't break
+   the uid as an identifier -- the 98.53% unweighted purity result shows the
+   card1+addr1+origin_day combination is still highly stable per persistent
+   client -- but it does mean origin_day's literal value should not be read
+   as a real calendar day. Not something to fix here per instructions (the
+   derivation is exactly as specified); just flagging that the number's sign
+   isn't meaningful on its own.
+
+Label purity result: 98.53% of the 83,557 multi-transaction uids are fully
+label-pure (unweighted), 97.61% weighted by transaction count -- the uid
+derivation collapses card+address+cohort into a genuinely consistent-label
+identity almost all of the time. Full numbers, the ten largest impure uids,
+and the size-distribution histogram are in results/uid_validation.md.
