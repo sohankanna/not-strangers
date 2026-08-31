@@ -212,3 +212,61 @@ label-pure (unweighted), 97.61% weighted by transaction count -- the uid
 derivation collapses card+address+cohort into a genuinely consistent-label
 identity almost all of the time. Full numbers, the ten largest impure uids,
 and the size-distribution histogram are in results/uid_validation.md.
+
+## 2026-08-31 — D1/origin_day investigation (read-only, no derivation changes)
+
+Follow-up on the negative-origin_day finding from the previous entry.
+`src/entities.py` and `src/evaluate.py` untouched -- this was pure
+investigation. Wrote `scripts/investigate_d1.py` -> `results/d1_investigation.md`.
+
+**The root cause is now clear and it's benign.** Split by D1 within each
+group tells the whole story: the "positive" group is 68.51% D1=0 (median
+D1=0), i.e. mostly cards being seen for the very first time within the
+dataset's own window, where origin_day trivially equals the transaction's
+own day. The "negative" group has median D1=252 and max D1=640 -- these are
+transactions from cards whose documented history (D1, "days since first
+seen") already exceeds the entire ~year-plus span of TransactionDT covered
+by this file. D1 isn't reset to this dataset's own day-zero; it reflects a
+card's real prior history, which can predate the collection window
+entirely. So negative origin_day isn't corrupted data, it's the arithmetic
+consequence of joining an absolute "card age" feature against a
+dataset-relative day counter. This matches last entry's guess ("D1 and
+TransactionDT don't share one consistent day-zero") but now has the actual
+mechanism behind it instead of just the symptom.
+
+**Answering the four questions, briefly (full tables and numbers in
+results/d1_investigation.md):**
+
+1. Yes, negative-origin_day rows are a different population, not noise:
+   lower fraud rate (1.60% vs 4.33%), much lower identity-record coverage
+   (7.35% vs 31.97%), and a heavily skewed ProductCD mix (92.07% ProductCD=W
+   vs 66.66%). They look like an older/more-established, lower-risk slice of
+   traffic, consistent with "cards with a longer prior history."
+2. D1 is not null-heavy in either group (can't be, by construction -- null
+   D1 makes origin_day NaN, which is excluded from both groups entirely).
+   It IS zero-heavy in the positive group (68.51%) and essentially never
+   zero in the negative group (0%) -- this is the actual mechanism above.
+3. Purity does NOT hold equally: 99.24% (weighted) for negative-origin_day
+   multi-transaction uids vs 96.61% for positive. Per the task's own
+   framing, that's the important case -- origin_day's sign is not cosmetic,
+   it correlates with how trustworthy the resulting uid's label consistency
+   is. Worth carrying forward: cluster features built on positive-origin_day
+   (newer-card) uids are somewhat noisier than ones built on
+   negative-origin_day (established-card) uids.
+4. Collision check on the 20 largest uids: card2/card3/card5 are constant
+   (1 distinct value) across literally all 20 -- expected, since they're
+   sub-attributes of the same physical card as card1, not independent
+   signals, so this adds nothing. P_emaildomain is where the real signal
+   is: it varies (2-3 distinct values) in **10 of the 20** largest uids.
+   card1+addr1+origin_day is genuinely merging multiple distinct people in
+   half of the largest clusters -- confirmed by data, not assumed. This is
+   "stability without correctness" exactly as the task named it: high label
+   purity is not evidence the uid identifies one physical client, only that
+   whoever it merges together tends to share a fraud outcome. Said plainly
+   in the report; derivation was not touched in response to this.
+
+**Nothing got corrected this time** -- the script ran cleanly on the first
+attempt, most likely because the index-alignment gotcha from the previous
+session (`df.set_index("TransactionID")` right after calling
+`resolve_entities`) was already a known pattern going in, not something
+rediscovered here.
