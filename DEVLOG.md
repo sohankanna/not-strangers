@@ -1,0 +1,125 @@
+# Dev log
+
+Honest, specific notes on what was built, what was surprising, and what broke
+or needed correcting. Written as work happens, not cleaned up afterward.
+
+## 2026-08-31 — Session setup (branch, CLAUDE.md rules)
+
+Branched to `uid-validation` off `main`. Added two rules to CLAUDE.md:
+test_transaction.csv has no labels (it's the Kaggle competition's actual
+holdout, never released to competitors), so every train/test split in this
+project has to happen inside train_transaction.csv; and synthetic label/score
+arrays used as metric-function test fixtures (e.g. `np.array([0,1,1,0])`) are
+explicitly not "fraud generation" under the defense-only rule. `.venv/` was
+already covered by the existing `.gitignore`, so nothing to add there.
+
+Worth recording from the *previous* scaffolding session even though it
+predates this devlog: the original `.gitignore` had a bare `data/` rule plus
+`!data/.gitkeep`, intending to keep the placeholder trackable while ignoring
+real data. That doesn't work — git's negation rule cannot re-include a file
+inside a directory that's already excluded at the directory level, so
+`data/.gitkeep` was silently still ignored. Fixed by changing the pattern to
+`data/**` (ignores contents, not the directory entry itself), which lets the
+negation actually take effect. Verified with `git check-ignore -v` and
+`git add --dry-run`.
+
+## 2026-08-31 — Task 1: src/data.py
+
+Implemented `load_transactions`: left-join train_transaction.csv with
+train_identity.csv on TransactionID (left, not inner, since identity covers
+only ~24% of transactions), downcast float64->float32 and low-cardinality
+(<=50 unique values) object columns to category, and raise a
+`FileNotFoundError` naming `scripts/download_data.sh` when either CSV is
+missing.
+
+Added a root-level `conftest.py` (empty file) so `tests/` can `import src.*`
+regardless of how pytest is invoked. Without it, pytest's default "prepend"
+import mode only adds the `tests/` directory itself to `sys.path` (since it
+has no `__init__.py`), not the repo root — `import src.data` would fail
+depending on cwd. This wasn't something the task called out explicitly; found
+it by reasoning through pytest's import mechanics rather than by hitting the
+failure, so it's untested against every possible invocation style, just the
+common ones (`pytest`, `python -m pytest`, both from repo root).
+
+The category-cutoff constant (50 unique values) is a judgment call, not
+something tuned against real data — no CSVs are present in this environment
+yet (see Task 3 below), so the actual cardinality of columns like ProductCD,
+card4/card6, M1-M9, or the id_* columns hasn't been checked. It may need
+revisiting once real data is loaded; DeviceInfo in particular is known from
+the competition's public documentation to have far more than 50 distinct
+values and will correctly stay `object` under this rule.
+
+Tests cover only the missing-file error path (3 cases: both missing, identity
+missing, transaction missing), per the task's explicit scope — the
+load/join/downcast happy path needs the real dataset.
+
+## 2026-08-31 — Task 2: evaluate.py implemented and frozen
+
+This is the metrics module that can never be edited later to look better, so
+getting the design right now mattered more than usual. Notes on the real
+decisions made, since the task description left some of them open:
+
+- **temporal_train_test_split**: a naive "take the row at the (1-test_size)
+  quantile" split can land in the middle of a group of rows sharing one
+  TransactionDT value, putting identical timestamps on both sides of the
+  boundary. Implemented as a backward walk over *unique* TransactionDT values
+  from most recent to oldest, accumulating each group's full row count atomically,
+  stopping once the accumulated count reaches the target test size. This
+  guarantees no timestamp group is ever split, at the cost of the realized
+  test fraction sometimes drifting from the requested `test_size` when a
+  large group straddles the boundary (tested explicitly with a synthetic
+  20-row tied group). Added an internal `assert train[dt_col].max() <
+  test[dt_col].min()` inside the function itself as a cheap self-check, given
+  how much rides on this invariant actually holding.
+- **evaluate_model's signature** needed `cost_fn`/`cost_fp` parameters that
+  weren't in the task's literal function-reference list, since it has to call
+  `cost_per_10k` internally and the instructions were explicit that costs must
+  never be hardcoded. Added them as optional kwargs defaulting to a neutral
+  1:1 ratio (not a guessed rupee amount) so callers can override with real
+  business costs later.
+- **evaluate_model calls `model.predict(X_test)` directly** (LightGBM's native
+  Booster API), not `src.model.predict()`. src/model.py is explicitly out of
+  scope for this session and still raises NotImplementedError, so routing
+  through it would make evaluate.py's tests fail for reasons that have
+  nothing to do with evaluate.py. This does mean evaluate.py currently assumes
+  callers pass something with a LightGBM-compatible `.predict()`, which is
+  worth knowing about when model.py is implemented later.
+- **cost_per_10k's threshold semantics**: chose `score >= threshold` (not
+  `>`) as "flagged". Arbitrary but has to be picked consistently somewhere,
+  and this is the natural reading of "at or above."
+- The pr_auc "near base rate" test uses a fixed-seed (`default_rng(0)`)
+  20,000-row uncorrelated random score vs. a 3.5% synthetic base rate, with an
+  0.02 absolute tolerance picked before running the test rather than measured
+  first. It passed on the first run (no correction needed), but that
+  tolerance was a guess about how much a fixed-seed run of that size would
+  wobble around the true base rate, not a derived bound — if this test ever
+  gets flaky after a numpy/sklearn version bump, that tolerance is the first
+  thing to revisit.
+
+Full suite result (14 tests, all passing):
+
+```
+============================= test session starts =============================
+platform win32 -- Python 3.13.3, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\sohan\Desktop\not-strangers\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\sohan\Desktop\not-strangers
+plugins: anyio-4.14.2
+collecting ... collected 14 items
+
+tests/test_data.py::test_raises_when_both_files_missing PASSED           [  7%]
+tests/test_data.py::test_raises_when_identity_missing PASSED             [ 14%]
+tests/test_data.py::test_raises_when_transaction_missing PASSED          [ 21%]
+tests/test_evaluate.py::test_temporal_split_train_strictly_before_test PASSED [ 28%]
+tests/test_evaluate.py::test_temporal_split_never_splits_a_tied_timestamp_group PASSED [ 35%]
+tests/test_evaluate.py::test_temporal_split_rejects_invalid_test_size PASSED [ 42%]
+tests/test_evaluate.py::test_pr_auc_perfect_ranking_is_one PASSED        [ 50%]
+tests/test_evaluate.py::test_pr_auc_uncorrelated_scores_are_near_base_rate PASSED [ 57%]
+tests/test_evaluate.py::test_recall_at_fpr_perfect_classifier_gets_full_recall PASSED [ 64%]
+tests/test_evaluate.py::test_recall_at_fpr_inverted_classifier_gets_near_zero_recall PASSED [ 71%]
+tests/test_evaluate.py::test_cost_per_10k_hand_computed PASSED           [ 78%]
+tests/test_evaluate.py::test_cost_per_10k_is_parameterised_not_hardcoded PASSED [ 85%]
+tests/test_evaluate.py::test_evaluate_model_returns_expected_keys PASSED [ 92%]
+tests/test_evaluate.py::test_evaluate_model_accepts_threshold_and_cost_overrides PASSED [100%]
+
+============================= 14 passed in 1.66s ==============================
+```
