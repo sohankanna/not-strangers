@@ -9,3 +9,7 @@ across a card once reported — treat as noisy.
 - No synthetic fraud/abuse generation of any kind (track is defense-only).
 - The LLM layer explains and prioritizes. policy.py decides. Never merge them.
 - Do not commit anything under data/.
+- Cluster features must be computed causally. Graph structure and aggregates
+  for a test transaction may only use transactions with strictly earlier
+  TransactionDT.
+
