@@ -123,3 +123,24 @@ tests/test_evaluate.py::test_evaluate_model_accepts_threshold_and_cost_overrides
 
 ============================= 14 passed in 1.66s ==============================
 ```
+
+## 2026-08-31 — Task 3: data check — stopping here
+
+`data/train_transaction.csv` (and `data/train_identity.csv`) are not present
+in this environment -- `data/` contains only `.gitkeep`. Per instructions,
+skipping Task 4 (entities.py UID derivation) and Task 5
+(`results/uid_validation.md` plus the size-distribution histogram) rather than
+attempting a Kaggle download, since the Kaggle API credentials and
+competition-rules acceptance aren't set up in this session.
+
+Everything in Tasks 4 and 5 needs the real dataset to produce honest numbers
+(row counts, uid label-purity, the actual distribution of transactions per
+uid) -- there's no meaningful way to do them against synthetic data without
+either fabricating the exact numbers the deliverable is supposed to report,
+or building a synthetic-fraud-pattern generator to make the numbers
+interesting, and both of those cut against what this session is for.
+
+To pick this back up: run `bash scripts/download_data.sh` (needs
+`pip install kaggle`, a Kaggle API token at `~/.kaggle/kaggle.json`, and
+having accepted the competition rules -- see that script's header comment),
+then re-run Task 4 and Task 5 from the original instructions.
