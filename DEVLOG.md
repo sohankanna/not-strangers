@@ -270,3 +270,71 @@ attempt, most likely because the index-alignment gotcha from the previous
 session (`df.set_index("TransactionID")` right after calling
 `resolve_entities`) was already a known pattern going in, not something
 rediscovered here.
+
+## 2026-08-31 — Task 1: graph.py implemented, and a real methodology problem found and fixed
+
+Implemented src/graph.py: LINKAGE_RULES (device_info, addr1_email,
+card_bank_addr, each with a one-line rationale), build_entity_graph (hub
+guard + edge construction, returns an EntityGraph(graph, excluded_hubs)
+dataclass rather than a bare nx.Graph -- signature change from the scaffold
+stub, needed to actually report what the hub guard excluded), get_connected_
+components, and compute_cluster_features (10 columns: cluster size/txn
+count/edge density/velocity/amount CV/burst concentration/email-uid ratio/
+prior-fraud share, plus per-uid node degree and email domain count).
+tests/test_graph.py: 10 tests, including the required explicit leakage test
+(a future, huge-amount, fraud-labeled transaction for an already-clustered
+uid must not change that uid's or its cluster's features at all -- verified
+by asserting the feature frame is byte-for-byte identical with vs. without
+that row).
+
+**What surprised me, and it's a big one:** a 50k-row smoke test before
+moving to Task 2 showed 29,211 of 30,185 nodes (96.8%) collapsing into ONE
+connected component at the task's specified default, max_degree=1000. That
+is not a ring, it's almost the whole active population -- cluster features
+computed on it would be nearly constant across nearly every transaction and
+carry no discriminating signal. Investigated properly on the full dataset
+(524k uid'd rows) with a cheap union-find (no need to materialize edges to
+check this): at max_degree=1000, the largest cluster is 127,708 uids (64% of
+all 199,070 uids). Root cause: addr1 is a region-level code with only a few
+hundred distinct values across the whole file, and card3/card5 are
+dominated by one or two values (150.0/226.0 cover the overwhelming
+majority) -- so card_bank_addr is nearly a proxy for addr1 alone, not an
+independent signal, and even "below-hub" addr1-based groups (100-999
+members) bridge transitively into one supercluster once enough of them
+overlap.
+
+Swept max_degree on the full dataset: 15 -> largest 77 uids; 20 -> 126;
+25 -> 526; 30 -> 919; 35 -> **5,141**; 40 -> 6,625; 45 -> 10,074; 1000 ->
+127,708. There's a sharp phase transition between 30 and 35 (a 5.6x jump),
+not a gradual one -- this is a real structural property of the linkage
+rules on this data, not noise. Also relevant for tractability: my clique-
+based edge construction (itertools.combinations per shared-value group) is
+O(k^2) per group; at max_degree=1000 a single near-threshold group can
+contribute ~500k edges, and the 50k-row smoke test alone produced 6.4M
+edges in 19s -- at full scale with the literal default this would likely be
+tens of millions of edges and impractically slow. Lowering max_degree fixes
+both problems at once.
+
+**Fix:** kept build_entity_graph's own default at max_degree=1000, exactly
+as specified in the task -- but run_pipeline.py calls it with max_degree=20,
+documented prominently in graph.py's module docstring with the full sweep
+so the number isn't just buried in a commit. Verified at full scale with
+the real function (not just the union-find estimate): max_degree=20 builds
+in 3.2s (199,070 nodes, 65,223 edges), connected components in 0.35s
+(largest 126 uids), and compute_cluster_features over all 199,070 uids in
+15.8s. This is a graph-construction/methodology decision, not a metric being
+tuned -- the ablation lift hasn't been measured yet (that's Task 2) and this
+choice was made before seeing any model result, purely from cluster-size
+distributions.
+
+**Got wrong and corrected (in the investigation, not in graph.py itself):**
+my first attempt at investigating this on the real data returned "0 rows
+covered" for every single linkage rule -- looked like a data problem, but it
+was the exact same indexing bug class flagged in the entities.py DEVLOG
+entry, just recommitted in a throwaway analysis script: I assigned
+`df["uid"] = uid` without first calling `df.set_index("TransactionID")`, so
+pandas aligned the RangeIndex against uid's TransactionID index and got
+NaN almost everywhere. graph.py's own `_prepare()` helper already does this
+correctly (that's precisely why it exists as a shared helper rather than
+being repeated inline) -- the bug was only in my scratch investigation code,
+not in the module being tested.
