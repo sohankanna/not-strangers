@@ -100,10 +100,15 @@ rules, and the batch/inline split -- is in
 ## Limitations
 
 - **The dominant feature is backward-looking, partly circular fraud
-  history.** `cluster_prior_fraud_share` measures label propagation
-  across a card, not independently-discovered abuse, and per
-  results/stability.md it carries essentially all of the reliably
-  measured lift. Full discussion: [results/ablation.md](results/ablation.md).
+  history -- and richer topology features don't change that.**
+  `cluster_prior_fraud_share` measures label propagation across a card,
+  not independently-discovered abuse, and carries essentially all of the
+  reliably measured lift; a second attempt with topology features
+  (k-core depth, hub-vs-clique shape) still didn't produce a stable
+  effect across splits, which is a finding about this dataset and sample
+  size, not a bug. Full discussion:
+  [results/ablation.md](results/ablation.md),
+  [results/stability_topology.md](results/stability_topology.md).
 - **The uid over-merges.** `card1_addr1_origin_day` is highly label-pure
   (98.53%) but not verified-correct -- 10 of the 20 largest uids mix
   multiple distinct clients on `P_emaildomain`. Full collision check:

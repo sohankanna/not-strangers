@@ -1769,3 +1769,30 @@ measured lift in this project, and that was true before this session and
 remains true after two honest attempts to find something else. No
 feature definition, threshold, or max_degree was tuned to reach this
 conclusion; it's what both attempts actually found.
+
+## 2026-09-01 -- Task 4: strengthened the Limitations bullet, not softened
+
+**What was built.** Since Task 3 found topology does NOT rescue the
+residual lift, README.md's "dominant feature is backward-looking, partly
+circular fraud history" Limitations bullet was strengthened, not
+softened: it now states explicitly that a second attempt with topology
+features (k-core depth, hub-vs-clique shape) was made and still didn't
+produce a stable effect across splits, framed as a finding about this
+dataset and sample size, not a bug -- exactly the framing the task asked
+for on a negative result. Links added to results/ablation.md and the new
+results/stability_topology.md. results/stability.md's own numbers
+(mean +0.0060, spread 0.0230, sign flip) are untouched and still the
+number this bullet's cross-reference ultimately traces back to -- nothing
+about this session hid or replaced that finding, it added a second,
+consistent one on top of it.
+
+**Whether this changed my belief, stated directly (repeating Task 3's
+answer since it's the same belief-update, just now reflected in the
+document a reader actually sees):** yes. Two independent feature-
+engineering attempts -- aggregates, then topology -- have now failed to
+find a reliable non-prior-fraud signal in this dataset's cluster
+structure. That's no longer "underpowered, might still be real" in my own
+read; it's a fairly settled negative result for this specific dataset and
+sample size, and README.md now says so as plainly as the Result section
+and Limitations bullet format (bold headline, two sentences, link out)
+allow.
