@@ -759,3 +759,51 @@ volume" a riskier proposition than it sounds.
 No corrections needed -- ran cleanly on the first attempt, including the
 column-reindex safeguard added proactively before running rather than
 discovered by a crash.
+
+## 2026-08-31 — Task 6: cluster case studies
+
+scripts/case_studies.py generates investigator explanations for all 1,567
+multi-uid clusters in the train graph, ranks by priority_score, and prints
+raw detail (per-uid breakdown, shared identifier values, amounts, time
+span, fraud labels) for the top 3. results/case_studies.md is the manual
+write-up on top of that raw output -- deliberately not templated, since
+"does this look like a real ring" is exactly the judgment call a script
+shouldn't make for you (said explicitly in the script's own docstring).
+
+All 3 top clusters turned out to be small (2 uids each) and 100% fraud-
+labeled -- not cherry-picked, it's a direct consequence of
+priority_score weighting cluster_prior_fraud_share at 100x: a small
+cluster where every known transaction is fraud maxes that term out, so
+small-and-fully-fraudulent clusters dominate this particular ranking.
+Worth stating about the ranking itself, not just the 3 clusters it
+surfaced.
+
+Checked which specific linkage rule created each cluster's edge by reading
+the actual `rules` edge attribute from the graph object (not inferred from
+shared-value tables) -- this mattered:
+- **Case 1** (`card_bank_addr`, an uncommon card3=223/card5=224 pairing --
+  most transactions in this dataset cluster on card3=150/card5=226, so
+  this specific combination matching is rarer and more specific than the
+  hub-guard's raw uid-count threshold alone would suggest): plausible true
+  positive.
+- **Case 2** (`device_info`, a specific Samsung build string
+  `SM-G950F Build/NRD90M` linking two otherwise-unconnected card+address
+  pairs, transactions 4.7 minutes apart, identical $300 amounts, both
+  fraud): the strongest case of the three.
+- **Case 3** (`device_info`, but the shared value is `"en-gb"` -- reads as
+  a locale/language string, not a device fingerprint): flagged explicitly
+  as the weakest case, per the task's instruction to include a
+  possible-false-positive and say so rather than swap it for a
+  cleaner-looking example. The behavioral pattern (3.7 minutes apart,
+  identical $150 amounts, both fraud) is genuinely suspicious and mirrors
+  Case 2's shape, so it isn't confidently a false positive either --
+  reported as ambiguous, with the specific reason the identifier is weaker
+  spelled out (a value real unrelated en-GB-locale users could plausibly
+  share, only below max_degree=20 by chance in this data slice, not
+  because it's actually rare).
+
+This is the first task this session where the deliverable is a judgment
+call rather than a number -- worth being honest that "plausible true
+positive" and "ambiguous" are reads, not measurements, and the report says
+so in its own closing section rather than implying more precision than 3
+manually-inspected clusters out of 1,567 can support.
