@@ -407,3 +407,81 @@ pandas 3.0.5 about "str" dtype columns being swept in implicitly under
 "object" and that becoming an error in a future pandas version. Fixed by
 being explicit: `include=["object", "str"]`. Caught by the model.py unit
 tests before it ever touched the real 434-column dataset.
+
+## 2026-08-31 — Task 3: adversarial sanity checks -- no leak found, but the lift is concentrated
+
+Wrote scripts/sanity_checks.py, appending a "## Sanity checks" section to
+results/ablation.md (not a separate file, since the re-ablation explicitly
+needed to land as a second row in the same results table).
+
+**1. Correlation with isFraud (train set):** cluster_prior_fraud_share is
+0.7797 -- the only feature over the 0.5 red-flag threshold by a wide
+margin (next highest is cluster_velocity at 0.057). This alone doesn't
+prove a leak, but it's exactly the shape one looks like, so it drove
+section 2.
+
+**2. Traced cluster_prior_fraud_share for a leak -- found none, but only
+after fixing my own check.** First attempt picked the first cluster with
+*any* test-period fraud row as the demonstration example, and got a false
+positive: reported, independently-recomputed, and "if-leaked" values all
+came out identical (0.0563), which my comparison logic mislabeled as
+"MISMATCH" because it required the leaked value to differ from the
+reported one to count as a pass. Looking at *why* they matched: the
+example uid already had fraud labels in the *train* period too, so its
+per-uid "ever fraud" flag was already 1 before the test-period row existed
+-- the test-period fraud couldn't have changed anything even if it had
+leaked in, so the example proved nothing either way. That's a test-design
+bug, not a pipeline bug, but it would have shipped a false "leak found" if
+I'd trusted the first run's verdict text without reading the numbers.
+Fixed by computing expected-vs-leaked prior-fraud share for *every*
+cluster and picking the one with the largest gap as the example --
+guarantees a non-vacuous demonstration instead of hoping for one. Also
+added a global check across all clusters, not just the one example.
+
+Real result: **0 mismatches across all 155,579 clusters** between the
+pipeline's reported cluster_prior_fraud_share and an independent
+recomputation from raw rows with `TransactionDT < as_of` (bypassing
+graph.py entirely). The maximally-discriminating concrete example (cluster
+#17894, a singleton uid with two fraud transactions, both in the test
+period): reported = 0.0000, independently recomputed = 0.0000, what it
+would be if test-period rows had leaked in = 1.0000. No leak.
+
+**Why the correlation is still so high without leaking:** CLAUDE.md
+already documents that labels "propagate across a card once reported."
+cluster_prior_fraud_share is close to a direct measurement of exactly that
+dynamic -- "has this persistent card-identity already been caught" --
+which is fully legitimate as a *causal, non-leaking* feature, but its
+predictive power comes largely from the same noisy label-propagation
+process this project already flags as a caveat, not from discovering an
+independent abuse signal. Worth remembering when reading the headline
+lift number: high but not leaking is not the same as high and clean.
+
+**3. Re-ablation without cluster_prior_fraud_share:**
+
+| model | PR-AUC | Recall @ 1% FPR | Cost per 10k |
+|---|---:|---:|---:|
+| baseline | 0.5646 | 0.4791 | 30,078.40 |
+| cluster (full) | 0.6322 | 0.5576 | 26,155.72 |
+| cluster (no prior_fraud_share) | 0.5756 | 0.4951 | 29,317.66 |
+
+Removing that one feature shrinks the lift from +0.0676 to +0.0110 PR-AUC
+(84% of the measured lift comes from that single feature), from +0.0785 to
++0.0160 recall@1%FPR, and from -3,922.68 to -760.74 cost per 10k. The
+remaining lift is real, small, and driven by the other 9 structural/graph
+features (edge density, velocity, burst concentration, email
+heterogeneity, cluster size) -- reported as-is, not chased further to make
+it look bigger.
+
+**4. Cluster assignment independence from test-period edges: confirmed.**
+0 graph nodes found with zero train-period transactions (should be 0, and
+was). Concrete example: a uid appearing only in the test period is absent
+from the graph and gets fully-null broadcast cluster features, exactly as
+expected -- no train-period history means no cluster signal, not a
+fabricated one.
+
+**Bottom line for this task:** no leak found anywhere checked. The
+headline ablation numbers from Task 2 stand, but the honest reading is
+"~84% of the lift is one feature that's legitimate but rides on the
+project's own documented noisy-label dynamic; the graph-structural
+features alone add a smaller, genuine ~0.011 PR-AUC." Both numbers are now
+in results/ablation.md; neither is hidden in favor of the other.
