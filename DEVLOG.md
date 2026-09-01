@@ -518,3 +518,41 @@ legitimate transactions, which is a real business-acceptability question
 the illustrative cost ratio is doing all the work to answer. Said this
 directly in ablation.md rather than only reporting the flattering
 recall/cost numbers next to it.
+
+## 2026-08-31 — Task 5: README results table and Limitations section
+
+Filled in the Result table with the real numbers from all three model
+variants (baseline, cluster, cluster minus cluster_prior_fraud_share),
+linked to results/ablation.md for the full breakdown, and added a short
+paragraph flagging that ~84% of the headline lift is one feature -- didn't
+want the table alone to imply an uncomplicated win. Left "Why clusters",
+"Data & labels", "Architecture" and "Running it" as empty headers: the task
+asked specifically for the results table and a Limitations section, and
+filling in the others wasn't asked for and isn't this session's call to
+make.
+
+Limitations section covers exactly the four things asked for: label noise
+and its direct tie to cluster_prior_fraud_share's dominance; the uid
+over-merging finding from d1_investigation.md (P_emaildomain varies in 10
+of the 20 largest uids); the ~11% no-uid population and its much higher
+fraud rate (11.63% vs 2.46%); and the no-ground-truth caveat that
+everything measured here is feature lift on a fraud classifier, not
+validated ring-detection accuracy.
+
+Nothing surprising in this task -- it's a writing task pulling together
+numbers already computed and verified in Tasks 1-4, not new analysis. No
+corrections needed.
+
+---
+
+**Session summary (uid-and-graph branch, this multi-day session):**
+graph.py, model.py and run_pipeline.py implemented; a genuine graph-
+construction bug (giant-component collapse at the task's specified
+max_degree default) found and fixed before it could contaminate anything
+downstream; a real ablation run end-to-end on the full dataset; an
+adversarial pass that found no leak but did find the lift is concentrated
+in one feature, and said so; a cost curve with an honestly-reported
+uncomfortable FPR at the "optimal" point; and a README that reflects all of
+it, including the parts that don't make the result look as clean as a
+single PR-AUC number would suggest. evaluate.py, entities.py, investigator.py
+and policy.py were never touched, as instructed.
