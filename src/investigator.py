@@ -14,19 +14,37 @@ explicitly forbids the model from stating any number not already present in
 that JSON -- this is checked programmatically, not just requested, in
 scripts/eval_investigator.py.
 
+If ANTHROPIC_API_KEY is an identity-linked (workspace) key, the API also
+requires an `anthropic-workspace-id` header -- set ANTHROPIC_WORKSPACE_ID
+in the environment and it's passed as a default header on every request.
+It's omitted entirely when unset, so a plain (non-identity-linked) key
+keeps working unchanged. See README.md's setup section.
+
 Graceful degradation: if ANTHROPIC_API_KEY is unset, or the API call fails
-for any reason (network, rate limit, malformed response), explain_cluster
-falls back to a deterministic template narrative built by directly
-formatting the evidence dict's own values, and marks the result with
-source="ungrounded-fallback". This module must never raise for lack of a
-key or a flaky network call -- `make results` has to complete for a
-reviewer who has never set ANTHROPIC_API_KEY.
+for any reason (network, rate limit, malformed response, a missing
+workspace header, an empty balance), explain_cluster falls back to a
+deterministic template narrative built by directly formatting the evidence
+dict's own values, and marks the result with source="ungrounded-fallback".
+This module must never raise for lack of a key or a flaky network call --
+`make results` has to complete for a reviewer who has never set
+ANTHROPIC_API_KEY.
+
+The fallback path staying silent is exactly what let a whole session run
+with 30/30 explanations silently falling back while a report claimed "at
+least one explanation used the real LLM path" -- see DEVLOG.md's entry on
+this. Graceful degradation is still correct (a bad key must not crash
+`make results`), but the failure itself must never be invisible: every
+fallback caused by an exception logs the exception's type and message to
+stderr, and records it on the ClusterExplanation (`error`) so any report
+built from these can state plainly what actually happened, derived from
+the real outcome rather than from whether a key happened to be present.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 
 import pandas as pd
@@ -74,6 +92,10 @@ class ClusterExplanation:
         source: "llm" if `narrative` came from the Anthropic API,
             "ungrounded-fallback" if it came from the deterministic
             template because no API key was available or the call failed.
+        error: None on success. Otherwise the reason the fallback path was
+            taken -- "ANTHROPIC_API_KEY not set", or "{ExceptionType}:
+            {message}" for a failed API call. Always set when
+            source="ungrounded-fallback", always None when source="llm".
     """
 
     cluster_id: str
@@ -82,6 +104,7 @@ class ClusterExplanation:
     evidence: dict
     priority_score: float
     source: str = "llm"
+    error: str | None = None
 
 
 def _round_evidence_value(value):
@@ -176,7 +199,12 @@ def _call_anthropic(evidence: dict) -> str:
     import anthropic
 
     api_key = os.environ["ANTHROPIC_API_KEY"]
-    client = anthropic.Anthropic(api_key=api_key)
+    workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    client_kwargs: dict = {"api_key": api_key}
+    if workspace_id:
+        client_kwargs["default_headers"] = {"anthropic-workspace-id": workspace_id}
+
+    client = anthropic.Anthropic(**client_kwargs)
     response = client.messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
@@ -204,13 +232,22 @@ def explain_cluster(
     Returns:
         A ClusterExplanation. `source` is "llm" on success, or
         "ungrounded-fallback" if ANTHROPIC_API_KEY was unset or the API
-        call failed -- this function never raises for either reason.
+        call failed -- this function never raises for either reason, but
+        every fallback caused by a failed call logs the exception to
+        stderr and records it in `.error` (see the module docstring for
+        why this matters: a silent fallback here previously hid an entire
+        session's worth of unmeasured LLM calls).
     """
     evidence = build_evidence(cluster_features, transactions)
     entity_ids = cluster_features.index.tolist()
     priority_score = _priority_score(evidence)
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
+        error_message = "ANTHROPIC_API_KEY not set"
+        print(
+            f"[investigator] {cluster_id}: {error_message}; using fallback narrative",
+            file=sys.stderr,
+        )
         return ClusterExplanation(
             cluster_id=cluster_id,
             entity_ids=entity_ids,
@@ -218,6 +255,7 @@ def explain_cluster(
             evidence=evidence,
             priority_score=priority_score,
             source="ungrounded-fallback",
+            error=error_message,
         )
 
     try:
@@ -230,7 +268,13 @@ def explain_cluster(
             priority_score=priority_score,
             source="llm",
         )
-    except Exception:
+    except Exception as exc:
+        error_message = f"{type(exc).__name__}: {exc}"
+        print(
+            f"[investigator] {cluster_id}: Anthropic API call failed "
+            f"({error_message}); using fallback narrative",
+            file=sys.stderr,
+        )
         return ClusterExplanation(
             cluster_id=cluster_id,
             entity_ids=entity_ids,
@@ -238,6 +282,7 @@ def explain_cluster(
             evidence=evidence,
             priority_score=priority_score,
             source="ungrounded-fallback",
+            error=error_message,
         )
 
 

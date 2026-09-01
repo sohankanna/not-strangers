@@ -104,6 +104,117 @@ def test_build_evidence_contains_only_json_serializable_numbers():
         assert isinstance(value, (int, float)), f"{key} is not numeric: {value!r}"
 
 
+def test_explain_cluster_records_error_on_missing_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    result = explain_cluster("cluster-1", _cluster_features(), _transactions())
+
+    assert result.error == "ANTHROPIC_API_KEY not set"
+
+
+def test_explain_cluster_records_error_on_api_failure(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    import src.investigator as investigator_module
+
+    def _boom(evidence):
+        raise RuntimeError("simulated network failure")
+
+    monkeypatch.setattr(investigator_module, "_call_anthropic", _boom)
+
+    result = explain_cluster("cluster-1", _cluster_features(), _transactions())
+
+    assert result.error == "RuntimeError: simulated network failure"
+
+
+def test_explain_cluster_error_is_none_on_llm_success(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    import src.investigator as investigator_module
+
+    monkeypatch.setattr(
+        investigator_module, "_call_anthropic", lambda evidence: "a clean narrative"
+    )
+
+    result = explain_cluster("cluster-1", _cluster_features(), _transactions())
+
+    assert result.error is None
+
+
+def test_explain_cluster_logs_failure_to_stderr(monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    import src.investigator as investigator_module
+
+    def _boom(evidence):
+        raise ValueError("bad response")
+
+    monkeypatch.setattr(investigator_module, "_call_anthropic", _boom)
+
+    explain_cluster("cluster-99", _cluster_features(), _transactions())
+
+    captured = capsys.readouterr()
+    assert "cluster-99" in captured.err
+    assert "ValueError" in captured.err
+    assert "bad response" in captured.err
+
+
+def test_explain_cluster_logs_missing_key_to_stderr(monkeypatch, capsys):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    explain_cluster("cluster-42", _cluster_features(), _transactions())
+
+    captured = capsys.readouterr()
+    assert "cluster-42" in captured.err
+    assert "ANTHROPIC_API_KEY not set" in captured.err
+
+
+class _FakeMessages:
+    def create(self, **kwargs):
+        block = type("Block", (), {"text": "narrative"})()
+        return type("Resp", (), {"content": [block]})()
+
+
+def test_call_anthropic_passes_workspace_header_when_set(monkeypatch):
+    import anthropic
+
+    import src.investigator as investigator_module
+
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.messages = _FakeMessages()
+
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "ws-123")
+
+    investigator_module._call_anthropic({"a": 1})
+
+    assert captured["api_key"] == "fake-key"
+    assert captured["default_headers"] == {"anthropic-workspace-id": "ws-123"}
+
+
+def test_call_anthropic_omits_workspace_header_when_unset(monkeypatch):
+    import anthropic
+
+    import src.investigator as investigator_module
+
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.messages = _FakeMessages()
+
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+
+    investigator_module._call_anthropic({"a": 1})
+
+    assert "default_headers" not in captured
+
+
 def test_prioritize_clusters_orders_by_priority_score_descending():
     low = ClusterExplanation(
         cluster_id="low", entity_ids=["u1"], narrative="", evidence={}, priority_score=1.0

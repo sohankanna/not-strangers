@@ -911,7 +911,33 @@ def _select_clusters(pipeline_data: PipelineData, n: int) -> list[set]:
     return [multi_sorted[i] for i in indices]
 
 
+def _groundedness_stats(
+    explanations: list[investigator.ClusterExplanation],
+) -> tuple[int, int, float, list[tuple[str, list[float], str]]]:
+    total_claims = 0
+    total_ungrounded = 0
+    records = []
+    for e in explanations:
+        claims = _extract_numbers(e.narrative)
+        ungrounded = _ungrounded_claims(e.narrative, e.evidence)
+        total_claims += len(claims)
+        total_ungrounded += len(ungrounded)
+        if ungrounded:
+            records.append((e.cluster_id, ungrounded, e.narrative))
+    rate = 1.0 - (total_ungrounded / total_claims) if total_claims else float("nan")
+    return total_claims, total_ungrounded, rate, records
+
+
 def write_investigator_eval(pipeline_data: PipelineData) -> None:
+    """Run explain_cluster on 30 risk-spanning clusters and report
+    groundedness -- every claim in the written report is derived from the
+    actual run's `source`/`error` fields, never inferred from whether
+    ANTHROPIC_API_KEY happened to be set. See DEVLOG.md for why that
+    distinction is the entire point of this function: a workspace-linked
+    key without the required header fails on every single call, and this
+    report used to say "at least one explanation used the real LLM path"
+    while 30 of 30 had silently fallen back.
+    """
     n_clusters = 30
     n_examples = 3
 
@@ -935,20 +961,23 @@ def write_investigator_eval(pipeline_data: PipelineData) -> None:
 
     ranked = investigator.prioritize_clusters(explanations)
 
-    total_claims = 0
-    total_ungrounded = 0
-    ungrounded_records = []
     sources: dict[str, int] = {}
+    error_counts: dict[str, int] = {}
     for explanation in explanations:
-        claims = _extract_numbers(explanation.narrative)
-        ungrounded = _ungrounded_claims(explanation.narrative, explanation.evidence)
-        total_claims += len(claims)
-        total_ungrounded += len(ungrounded)
         sources[explanation.source] = sources.get(explanation.source, 0) + 1
-        if ungrounded:
-            ungrounded_records.append((explanation.cluster_id, ungrounded, explanation.narrative))
+        if explanation.error:
+            error_counts[explanation.error] = error_counts.get(explanation.error, 0) + 1
 
-    groundedness_rate = 1.0 - (total_ungrounded / total_claims) if total_claims else float("nan")
+    n_total = len(explanations)
+    n_llm = sources.get("llm", 0)
+    n_fallback = n_total - n_llm
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    llm_explanations = [e for e in explanations if e.source == "llm"]
+    fallback_explanations = [e for e in explanations if e.source != "llm"]
+    llm_claims, llm_ungrounded_n, llm_rate, llm_ungrounded_records = _groundedness_stats(llm_explanations)
+    fb_claims, fb_ungrounded_n, fb_rate, fb_ungrounded_records = _groundedness_stats(fallback_explanations)
+    all_claims, all_ungrounded_n, all_rate, _ = _groundedness_stats(explanations)
 
     ranked_asc = list(reversed(ranked))
     example_indices = (
@@ -959,27 +988,48 @@ def write_investigator_eval(pipeline_data: PipelineData) -> None:
     examples = [ranked_asc[i] for i in example_indices]
 
     lines: list[str] = ["# Investigator evaluation", ""]
-    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     lines.append(
         f"ANTHROPIC_API_KEY was {'set' if has_key else '**NOT set**'} when this ran. "
-        f"Explanation sources: {sources}. "
-        + (
-            "**Every explanation below took the deterministic fallback path "
-            "(source=ungrounded-fallback), not the real LLM.** The fallback "
-            "narrative is built by directly formatting the evidence dict's "
-            "own values, so it is grounded by construction -- the "
-            "groundedness rate below measures that template, not "
-            "claude-sonnet-4-6's actual behavior under the prompt's hard "
-            "rule. Re-run this with a real key for an honest measurement "
-            "of the LLM path."
-            if not has_key
-            else "At least one explanation used the real LLM path -- see "
-            "the `source` column below for which."
-        )
+        f"Explanation sources (derived from the actual run's `source` field, "
+        f"not assumed from whether a key was present): {sources}."
     )
     lines.append("")
+
+    # This claim is computed strictly from `sources` -- a key being present
+    # does not mean any call succeeded.
+    if n_llm == 0:
+        lines.append(
+            f"**0 of {n_total} explanations used the real LLM path -- all "
+            f"{n_total} took the deterministic fallback.**"
+        )
+        lines.append(
+            "This happened DESPITE ANTHROPIC_API_KEY being set, which means "
+            "every fallback here was caused by a real failure, not a "
+            "missing key -- see 'Fallback errors encountered' below for "
+            "exactly what went wrong on every call."
+            if has_key
+            else "ANTHROPIC_API_KEY was not set, so this is expected -- "
+            "there was no key to call the API with."
+        )
+    elif n_fallback == 0:
+        lines.append(f"**All {n_total} of {n_total} explanations used the real LLM path.**")
+    else:
+        lines.append(
+            f"**{n_llm} of {n_total} explanations used the real LLM path; "
+            f"{n_fallback} fell back.** See 'Fallback errors encountered' "
+            "below for why the fallback ones did."
+        )
+    lines.append("")
+
+    if error_counts:
+        lines.append("### Fallback errors encountered")
+        lines.append("")
+        for err, count in sorted(error_counts.items(), key=lambda kv: -kv[1]):
+            lines.append(f"- `{err}` -- {count} of {n_total} cluster(s)")
+        lines.append("")
+
     lines.append(
-        f"Evaluated {len(explanations)} clusters, selected to span the risk "
+        f"Evaluated {n_total} clusters, selected to span the risk "
         "range: sorted all multi-uid clusters (2+ members) by "
         "cluster_prior_fraud_share, then took 30 evenly-spaced percentile "
         "points across that sorted list (not just the top 30 riskiest)."
@@ -988,24 +1038,76 @@ def write_investigator_eval(pipeline_data: PipelineData) -> None:
 
     lines.append("## Groundedness")
     lines.append("")
-    lines.append(f"- Total numeric claims extracted across all narratives: **{total_claims}**")
-    lines.append(f"- Ungrounded claims: **{total_ungrounded}**")
+    if n_llm > 0:
+        lines.append(
+            f"**On the {n_llm} real LLM explanation(s): {llm_ungrounded_n} of "
+            f"{llm_claims} numeric claims ungrounded -- groundedness rate "
+            f"{llm_rate:.2%}.** This is the number that actually measures "
+            "claude-sonnet-4-6's behavior under the prompt's hard rule. "
+            "Reported honestly whatever it is -- a rate below 100% is a "
+            "finding about the model's behavior, not something to fix by "
+            "loosening the claim extractor."
+        )
+    else:
+        lines.append(
+            "**No real LLM explanations were produced this run -- there is "
+            "nothing here that measures claude-sonnet-4-6's actual "
+            "behavior.** The fallback-only numbers below are not a "
+            "substitute for that measurement."
+        )
+    lines.append("")
     lines.append(
-        f"- Groundedness rate: **{groundedness_rate:.2%}** "
-        "(a claim counts as grounded if it matches some evidence value "
-        "exactly, at any rounding from 0-4 decimal places, or as that "
-        "value expressed as a percentage)"
+        f"- Fallback-only groundedness (for reference; expected ~100% since "
+        "it's built by directly formatting evidence values verbatim): "
+        f"{fb_ungrounded_n} of {fb_claims} claims ungrounded"
+        + (f" ({fb_rate:.2%})" if fb_claims else " (no fallback explanations this run)")
+    )
+    lines.append(
+        f"- Combined (LLM + fallback) across all {n_total} explanations: "
+        f"{all_ungrounded_n} of {all_claims} claims ungrounded"
+        + (f" ({all_rate:.2%})" if all_claims else "")
+        + ". Not the LLM's groundedness rate when fallback explanations are "
+        "mixed in -- a trivially-grounded template dilutes or inflates the "
+        "real number, which is why it's reported separately above."
     )
     lines.append("")
-    if ungrounded_records:
-        lines.append("### Every ungrounded claim found")
+    lines.append(
+        "(A claim counts as grounded if it matches some evidence value "
+        "exactly, at any rounding from 0-4 decimal places, or as that "
+        "value expressed as a percentage.)"
+    )
+    lines.append("")
+
+    if llm_ungrounded_records:
+        lines.append("### Every ungrounded claim found (LLM explanations)")
         lines.append("")
-        for cluster_id, ungrounded, narrative in ungrounded_records:
+        for cluster_id, ungrounded, narrative in llm_ungrounded_records:
             lines.append(f"- **{cluster_id}**: claimed {ungrounded}")
             lines.append(f"  > {narrative}")
         lines.append("")
-    else:
-        lines.append("No ungrounded claims found in this run.")
+    elif n_llm > 0:
+        lines.append("No ungrounded claims found among the LLM explanations.")
+        lines.append("")
+
+    if fb_ungrounded_records:
+        # Should never happen -- the fallback template is grounded by
+        # construction. If it does, that's a bug in the template or the
+        # claim extractor, not a fact about the LLM, and it's surfaced
+        # here rather than silently folded into a combined rate.
+        lines.append(
+            "### Unexpected: ungrounded claims found in FALLBACK explanations"
+        )
+        lines.append("")
+        lines.append(
+            "This should be impossible -- the fallback template only ever "
+            "prints evidence dict values verbatim. Its presence means a bug "
+            "in `_fallback_narrative` or the claim extractor, not a finding "
+            "about the LLM:"
+        )
+        lines.append("")
+        for cluster_id, ungrounded, narrative in fb_ungrounded_records:
+            lines.append(f"- **{cluster_id}**: claimed {ungrounded}")
+            lines.append(f"  > {narrative}")
         lines.append("")
 
     lines.append("## 3 example explanations (lowest, median, highest priority)")
@@ -1016,6 +1118,8 @@ def write_investigator_eval(pipeline_data: PipelineData) -> None:
         lines.append(f"- Priority score: {explanation.priority_score:.4f}")
         lines.append(f"- Member uids: {explanation.entity_ids}")
         lines.append(f"- Evidence: `{explanation.evidence}`")
+        if explanation.error:
+            lines.append(f"- Error: `{explanation.error}`")
         lines.append("")
         lines.append(f"> {explanation.narrative}")
         lines.append("")

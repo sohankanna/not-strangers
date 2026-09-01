@@ -30,7 +30,26 @@ residual lift on their own.
 ## Why clusters
 ## Data & labels
 ## Architecture
+
 ## Running it
+
+### Environment variables (investigator.py / the LLM layer)
+
+- `ANTHROPIC_API_KEY` -- required to get real explanations from
+  claude-sonnet-4-6 (see `src/investigator.py`). If unset, or if any API
+  call fails for any reason, the pipeline falls back to a deterministic
+  template narrative and keeps running -- `make results` always completes,
+  key or no key.
+- `ANTHROPIC_WORKSPACE_ID` -- **required in addition to the key if your key
+  is identity-linked (a workspace-scoped key rather than a plain API
+  key).** Identity-linked keys are rejected by the API unless every
+  request carries an `anthropic-workspace-id` header; without it, every
+  single call fails even though the key itself is valid, and (before this
+  was fixed) failed silently into the fallback path with no visible error.
+  Leave this unset if your key is not identity-linked -- it's only added
+  as a request header when present, so a plain key keeps working exactly
+  as before. See results/investigator_eval.md's "Fallback errors
+  encountered" section to check whether calls are actually succeeding.
 
 ## Limitations
 

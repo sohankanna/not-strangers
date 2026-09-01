@@ -904,3 +904,106 @@ here). Not fixed this session (installing system-level `make` is outside
 what a code change can do, and rewriting the Makefile as something
 Windows-native wasn't asked for) -- reported plainly instead, per this
 session's own instructions.
+
+## 2026-08-31 — A silent failure hid an entire unmeasured layer, and my own eval reported it as a success
+
+This is the most important bug this project has produced, and it wasn't
+caught by any test, any sanity check, or any of the "measure it, don't
+just ship it" discipline this session has otherwise followed. It was
+caught by the user reading results/investigator_eval.md and noticing that
+"ANTHROPIC_API_KEY was set" and "30/30 explanations were
+source=ungrounded-fallback" were both true on the same line, and asking
+why.
+
+**Root cause, as diagnosed and fixed by the user, not by this session's
+own investigation:** the Anthropic API key in use is identity-linked (a
+workspace-scoped key), which the API rejects on every single call unless
+the request carries an `anthropic-workspace-id` header. investigator.py
+never sent that header. Separately, the workspace's balance was zero.
+Both are now fixed on the account side; the header support is fixed here.
+
+**Why this is a real bug class, not just a one-off missing header:** this
+project's own design -- correctly -- required investigator.py to degrade
+gracefully: no API key, a network blip, a rate limit, anything, and
+`make results` must still complete rather than crash. That's the right
+call, and it's still the right call after this bug. The actual defect was
+one specific line: `except Exception: return <fallback>`, with nothing
+recording *why*. A graceful degradation path and a silent failure path are
+the same code until you ask "does anything downstream know the difference
+between 'degraded on purpose' and 'broke and I didn't notice'?" Here,
+nothing did. Every one of 30 calls failed with the exact same
+authentication error, for an entire session's worth of work (Task 1's
+implementation and Task 2's "measurement"), and the code had no way to
+surface that -- not a log line, not a counter, not a flag. The fallback
+path being *correct* is precisely what made the failure invisible: a
+crash would have been noticed in the first five seconds.
+
+**The compounding failure, which is the part worth sitting with:** Task 2
+of the earlier session was explicitly framed as "measure the investigator,
+don't just ship it" -- and it did report 100% groundedness with a caveat
+that the key was unset. That caveat was correct *then*. But this most
+recent run had a key set, and the report-writing code
+(write_investigator_eval, then in scripts/eval_investigator.py) contained
+this: the "at least one explanation used the real LLM path" sentence was
+selected by `if not has_key: ... else: "at least one explanation used the
+real LLM path"` -- driven by whether a key was *present*, not by whether
+`sources` actually contained anything other than `ungrounded-fallback`.
+The measurement layer -- the thing built specifically to catch exactly
+this kind of problem -- inherited the same category of bug as the thing it
+was measuring: it asserted an outcome from a precondition, not from the
+actual result. A precondition ("a key was set") is necessary but not
+sufficient for success, and reporting code must never conflate the two.
+This is the generalizable lesson: any report about whether a fallback path
+was needed must be computed from the actual recorded outcome of every
+attempt, never inferred from whether success was theoretically possible.
+
+**What was fixed, concretely:**
+- `investigator.py`: `_call_anthropic` now reads `ANTHROPIC_WORKSPACE_ID`
+  from the environment and passes it as `default_headers=
+  {"anthropic-workspace-id": ...}` when set, omitted entirely when unset
+  (a non-identity-linked key keeps working unchanged -- verified with a
+  test that inspects the actual kwargs a mocked `anthropic.Anthropic` was
+  constructed with, for both the header-present and header-absent cases).
+- `ClusterExplanation` gained an `error: str | None` field: `None` on a
+  real LLM success, `"ANTHROPIC_API_KEY not set"` or `"{ExceptionType}:
+  {message}"` on every fallback. `explain_cluster` now also prints
+  `[investigator] {cluster_id}: ...` to stderr on every fallback, so a
+  `make results` run has a visible trail even if no one reads the written
+  report afterward. The fallback *behavior* is unchanged -- still never
+  raises, still completes -- only its visibility changed.
+- `run_pipeline.write_investigator_eval` rewritten so every claim in
+  results/investigator_eval.md is derived from `sources`/`error`, never
+  from `has_key`: it now says "0 of 30 explanations used the real LLM
+  path" when that's true regardless of whether a key was present, and adds
+  a "Fallback errors encountered" section listing every distinct error
+  string and how many clusters hit it. Groundedness is now reported
+  separately for LLM-sourced vs. fallback-sourced narratives (a mix would
+  otherwise dilute or inflate the number that actually matters), with an
+  explicit "there is nothing here that measures claude-sonnet-4-6's actual
+  behavior" line when n_llm=0, and a defensive check that flags (rather
+  than silently trusts) an ungrounded claim ever showing up in a fallback
+  narrative, since that would itself be a bug given the template is
+  grounded by construction.
+- 7 new tests: `error` populated correctly for both fallback causes and
+  left `None` on success, the stderr log line contains the cluster id and
+  the real exception type/message, and the workspace header is present
+  only when `ANTHROPIC_WORKSPACE_ID` is set. 54 tests passing overall.
+- README.md documents `ANTHROPIC_WORKSPACE_ID` under a new "Running it ->
+  Environment variables" section, including the specific symptom (looks
+  like it's working, 100% fallback) so a future reader recognizes this
+  failure mode immediately instead of re-discovering it the way this
+  session did.
+
+**What this entry cannot honestly claim:** I do not have
+`ANTHROPIC_API_KEY` or `ANTHROPIC_WORKSPACE_ID` available in my own tool
+execution environment -- checked Bash, PowerShell, persisted Windows
+user/machine environment variables, and for a `.env` file; none were
+found. Re-running `scripts/eval_investigator.py` here still produces 0 of
+30 real LLM explanations, now *correctly* reported as
+`ANTHROPIC_API_KEY not set` rather than incorrectly implying success. The
+user has verified a direct API call succeeds in their own environment, but
+I have not personally produced or witnessed a real groundedness
+measurement against actual LLM output, and I am not reporting one. That
+measurement still needs to happen in an environment where the credentials
+are actually reachable -- this entry fixes the mechanism for measuring it
+honestly; it does not itself contain that measurement.
