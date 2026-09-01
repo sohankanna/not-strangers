@@ -1384,3 +1384,49 @@ around it in the same sentence, not a paragraph later. Fixed the
 runtime rather than a literal I'd typed while drafting the wording,
 before it could become the next hardcoded-number bug this project has
 already hit twice.
+
+## 2026-09-01 -- Task 2: five orderings, none of them confidently better
+
+**What was built.** `scripts/eval_priority_variants.py` ->
+results/priority_variants.md. `_priority_score`'s 100x weight on
+`cluster_prior_fraud_share` was picked by hand, so this evaluates it
+against four alternatives on the identical 494-cluster/9-positive
+population as results/queue_eval.md (imported from scripts/eval_queue.py,
+not recomputed): (a) the shipped priority score, (b) mean transaction
+score (queue_eval.md's baseline), (c) priority score with
+`cluster_prior_fraud_share` deleted from the evidence dict before calling
+`investigator._priority_score` -- not a reimplementation of the formula,
+the same frozen function with one term zeroed by omission, (d) max
+(instead of mean) transaction score per cluster, and (e) mean score
+multiplied by the cluster's full component size.
+
+**What the numbers say.** No variant wins outright. The best precision@k
+at each K is a different variant every time: (d) at K=10 and K=50, (b) at
+K=25, and a four-way tie including (a) itself at K=100. (c) -- dropping
+the 100x term entirely -- is not obviously better OR worse than (a); at
+K=50 it's tied with (b), at K=100 it's the worst of the five. The spread
+between the best and worst variant's fraud-cluster count at any given K
+is 1-4 clusters, computed directly from each table's counts (not
+guessed) -- the same magnitude as the noise callout in queue_eval.md's
+Task 1 fix.
+
+**What surprised me.** I expected (d), max-in-cluster, to be a clear
+improvement over (b), mean-in-cluster -- the intuition being that a
+single very suspicious transaction should out-signal an average diluted
+by a cluster's other, unremarkable members. It IS ahead at K=10 and
+K=50, but ties or loses at K=25 and K=100, and the swings are exactly the
+size the 9-positive sample can produce by chance. I did not expect
+"obviously more sensible aggregation choice" to still land inside the
+noise floor -- it's a reminder that with this few positives, even a
+directionally well-motivated variant can't be told apart from the others
+on this test split alone.
+
+**What this means for the project.** Reported as a menu of untested
+candidates for future work, explicitly not adopted: `investigator.py` and
+`policy.py` are unmodified, and results/priority_variants.md says plainly
+that recommending any one of these would need a less severe temporal
+split or a longer test window to get enough positive clusters to
+distinguish them. The honest conclusion of Tasks 1 and 2 together: this
+project's queue-ordering evaluation is fraud-count-limited, not
+idea-limited -- there are several plausible orderings, and not enough
+positives on this test split to say which, if any, is actually better.
