@@ -1,4 +1,4 @@
-"""abuse-ring-sentinel -- analyst review console.
+"""not-strangers -- analyst review console.
 
 An analyst-facing review queue, not a metrics showcase. Three tabs:
   - Review queue: clusters ranked by priority score, with a detail panel
@@ -58,7 +58,7 @@ RISK_STEPUP = "#B08D3E"
 RISK_ALLOW = "#6B7280"
 
 st.set_page_config(
-    page_title="abuse-ring-sentinel",
+    page_title="not-strangers",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -702,7 +702,7 @@ def render_audit_tab() -> None:
 
 def main() -> None:
     _inject_css()
-    st.title("abuse-ring-sentinel")
+    st.title("not-strangers")
     st.caption("Coordinated payment abuse review console -- ML scores, an LLM explains, policy.py decides.")
 
     pipeline_data, trained = load_pipeline_or_stop()

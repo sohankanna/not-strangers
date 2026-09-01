@@ -1561,3 +1561,32 @@ directly with already-computed, already-published numbers from
 results/stability.md -- the same pattern this project already uses
 elsewhere for prose that cites another report's figures (e.g. README's
 uid-validation numbers), not a new "hand-invented number" exception.
+
+## 2026-09-01 -- Task 6: renamed abuse-ring-sentinel to not-strangers
+
+**What was renamed.** The dashboard header (`st.title`), the browser-tab
+title (`st.set_page_config(page_title=...)`), app.py's own module
+docstring title, and README.md's H1 all said "abuse-ring-sentinel" --
+changed to "not-strangers" to match the actual repo name. The dashboard
+subtitle line (`st.caption(...)`) was left untouched, per instruction.
+
+**What was deliberately NOT touched, and why.** Grepped the whole repo
+case-insensitively for "sentinel" first, rather than assuming where it
+appeared. Two categories of match were left alone: (1) app.py's
+`sentinel-table` CSS class name (6 occurrences) -- an internal styling
+hook, never rendered as visible text, so it isn't a "user-facing"
+occurrence of the name; renaming it would touch more lines for no visible
+change. (2) `tests/test_entities.py`'s "stringified sentinel" and
+`results/investigator_eval.md`'s "credit abuse rings" (inside a captured,
+real LLM narrative) -- both use "sentinel"/"abuse ring" as the ordinary
+English/CS terms they are, unrelated to the project's old brand name;
+"abuse ring" is this project's own domain vocabulary (see CLAUDE.md's
+first line), not something to rename. ARCHITECTURE.md, results/*.md, and
+a repo-root pyproject.toml/setup.py/package.json were all checked and
+none exist or reference the old name.
+
+**Screenshots.** Re-ran scripts/capture_screenshots.py (Playwright +
+headless Chromium against a temporary `streamlit run app.py`) to
+regenerate all 3 docs/ PNGs. Verified the queue screenshot directly --
+header now reads "not-strangers", subtitle unchanged, rest of the queue
+UI identical. No pipeline files touched; 54/54 tests still pass.

@@ -1,4 +1,4 @@
-# abuse-ring-sentinel
+# not-strangers
 
 Detects coordinated payment abuse by resolving IEEE-CIS transactions into
 persistent client identities and scoring the *clusters* those identities
