@@ -1691,3 +1691,36 @@ design change, out of scope for a task about graph.py) -- flagged here so
 the next person who hand-edits a results/*.md file knows this can happen,
 and the next full pipeline re-run should be treated as an opportunity to
 check for this, not just the ablation numbers.
+
+## 2026-09-01 -- Task 2: topology features made row 4 slightly WORSE, not better
+
+**What was built.** `scripts/eval_topology.py` -> results/ablation_topology.md
+(new file, results/ablation.md untouched). Four rows on the same single
+80% split as results/ablation.md: (1) baseline, (2) + original cluster
+features -- both read straight off the existing, already-verified
+`run_pipeline.load_and_prepare()`/`train_both_models()`, not retrained --
+(3) + original cluster features minus `cluster_prior_fraud_share`, and (4)
++ original + the two new topology features (`k_core_number`, `star_ratio`),
+also minus `cluster_prior_fraud_share`. Rows 3-4 train fresh models via
+`model.train_cluster_model` (frozen) on modified feature sets; every
+metric comes from `evaluate.py`'s frozen functions.
+
+**What the numbers say.** Row 4 vs. row 3 -- the comparison that isolates
+whether topology adds anything with the dominant confound already
+removed from both sides -- is PR-AUC **-0.0045**, recall@1%FPR **-0.0015**,
+cost per 10k **+833.56** (worse). Not a rounding-noise tie: topology made
+this single split slightly worse, not better. Feature importances confirm
+why -- `star_ratio` ranks 113th of 443 features (gain 948.0), `k_core_number`
+228th (gain 187.0), both far below the aggregates they were meant to
+supplement (`cluster_amt_cv` gain 28,458.9, `cluster_velocity` 27,438.4).
+Reported exactly as computed; no retry, no alternate formula, no threshold
+adjustment to flip the sign.
+
+**What this means so far.** On this one split, richer topology features
+did not rescue the residual-lift story -- if anything they mildly hurt
+it. That is one split's answer, though; Task 3 re-runs this same
+comparison across the 4 rolling splits results/stability.md already used,
+which is the test that actually matters for whether this is real or
+single-split noise (the same lesson Task 3 of the earlier stability
+session taught about the aggregate-only lift itself). Not drawing the
+final conclusion here -- that's what the stability re-run is for.
