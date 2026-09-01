@@ -1,6 +1,6 @@
 """not-strangers -- analyst review console.
 
-An analyst-facing review queue, not a metrics showcase. Three tabs:
+An analyst-facing review queue, not a metrics showcase. Four tabs:
   - Review queue: clusters ranked by priority score, with a detail panel
     for the selected cluster -- in order: the real entity graph (with an
     optional side-by-side contrast against a similar-size non-flagged
@@ -11,6 +11,14 @@ An analyst-facing review queue, not a metrics showcase. Three tabs:
   - Model performance: the ablation table, cost curve and calibration
     plot, parsed from results/ at runtime.
   - Audit trail: results/audit_sample.jsonl, filterable by action.
+  - Live replay: a precomputed replay of real held-out test-split
+    transactions in actual TransactionDT order (see dashboard_replay.py)
+    -- an incrementally-revealed entity graph, a scored transaction feed,
+    live counters, and the LLM narrative for the first real cluster(s)
+    that cross REVIEW_THRESHOLD in the replayed window. Precomputed once
+    with st.cache_data; playback only ever indexes into that cached
+    sequence -- it never rescores, rebuilds the graph, or recomputes
+    features per frame.
 
 Attribution is load-bearing here, not decorative: CLAUDE.md's rule is
 "the LLM layer explains and prioritizes, policy.py decides, never merge
@@ -22,9 +30,9 @@ labeled with its actual source (LLM or the deterministic fallback -- see
 investigator.py) -- three distinct badges, matching the three distinct
 things CLAUDE.md says must never be merged. Nothing here is computed by
 "the dashboard": every node, edge, score, and value is read from src/ and
-results/ at runtime (see dashboard_graph.py and dashboard_attribution.py
-for the two new rendering modules this session added), per this
-project's rule against inventing numbers.
+results/ at runtime (see dashboard_graph.py, dashboard_attribution.py,
+and dashboard_replay.py for the rendering modules added across sessions),
+per this project's rule against inventing numbers.
 
 Run: streamlit run app.py
 """
@@ -34,6 +42,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import matplotlib
@@ -51,6 +60,7 @@ from src.graph import get_connected_components  # noqa: E402
 
 import dashboard_attribution  # noqa: E402
 import dashboard_graph  # noqa: E402
+import dashboard_replay  # noqa: E402
 from dashboard_theme import (  # noqa: E402
     ACCENT,
     BG,
@@ -907,6 +917,160 @@ def render_audit_tab() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Live replay tab (new, additive-only -- see dashboard_replay.py)
+# ---------------------------------------------------------------------------
+
+def render_replay_tab(pipeline_data, trained) -> None:
+    st.markdown(
+        f'<div class="panel panel-model" style="padding:12px 16px;margin-bottom:14px;">'
+        f'<b>Replay of real held-out transactions in actual timestamp order. '
+        f'Not simulated data.</b></div>',
+        unsafe_allow_html=True,
+    )
+
+    sequence = dashboard_replay.build_replay_sequence(pipeline_data, trained)
+    n_frames = len(sequence["frames"])
+
+    st.caption(
+        f"Replaying the first {sequence['window_size']:,} of "
+        f"{sequence['total_test_size']:,} test-split transactions, in their "
+        "real TransactionDT order -- chosen because this slice contains "
+        f"**{sequence['n_review_crossings_in_window']} real REVIEW_THRESHOLD "
+        "crossings** (of 10 that occur across the full test split), so the "
+        "payoff moment below is guaranteed to happen within this window, not "
+        "cherry-picked past it. Every score comes from src/model.py's "
+        "already-trained cluster model (one vectorized predict() call, "
+        "computed once); every decision from src/policy.py; the graph is "
+        "the real, train-derived entity graph, revealed incrementally as "
+        "its members transact. Nothing here is generated or simulated."
+    )
+
+    if "replay_step" not in st.session_state:
+        st.session_state.replay_step = 0
+    if "replay_playing" not in st.session_state:
+        st.session_state.replay_playing = False
+
+    ctrl_cols = st.columns([1, 1, 1, 3])
+    with ctrl_cols[0]:
+        if st.button("Play", key="replay_play_btn", use_container_width=True):
+            st.session_state.replay_playing = True
+    with ctrl_cols[1]:
+        if st.button("Pause", key="replay_pause_btn", use_container_width=True):
+            st.session_state.replay_playing = False
+    with ctrl_cols[2]:
+        if st.button("Reset", key="replay_reset_btn", use_container_width=True):
+            st.session_state.replay_step = 0
+            st.session_state.replay_playing = False
+    with ctrl_cols[3]:
+        speed = st.slider(
+            "Speed (transactions advanced per tick)", 1, 100, 15,
+            key="replay_speed",
+            help="Streamlit has no native animation clock, so 'speed' here "
+            "is how many precomputed transactions advance per rerun tick, "
+            "not a real-time rate.",
+        )
+
+    step = min(st.session_state.replay_step, n_frames - 1)
+    st.caption(f"Transaction {step + 1:,} of {n_frames:,} in this replay window.")
+
+    counters = dashboard_replay.counters_at(sequence, step)
+    ccols = st.columns(5)
+    ccols[0].metric(
+        "Transactions processed", f"{counters['cum_txns']:,}",
+        help="Every replayed transaction, whether or not it has a uid.",
+    )
+    ccols[1].metric(
+        "Uids seen", f"{counters['cum_uids_seen']:,}",
+        help="Distinct uids that have transacted so far in this replay.",
+    )
+    ccols[2].metric(
+        "Clusters formed", counters["cum_clusters_formed"],
+        help="Distinct real multi-uid clusters with 2+ of their members "
+        "revealed (visibly transacting) so far -- a graph-topology count, "
+        "not a score-based one.",
+    )
+    ccols[3].metric(
+        "step_up fired", counters["cum_step_up_fired"],
+        help="Distinct real clusters whose running max score (over their "
+        "revealed members) has crossed STEP_UP_THRESHOLD so far -- can "
+        "happen with just 1 revealed member if that uid's cluster already "
+        "has a high prior-fraud history from training. Not a count of "
+        "individual step_up actions (see the feed's action column for that).",
+    )
+    ccols[4].metric(
+        "review fired", counters["cum_review_fired"],
+        help="Distinct real clusters whose running max score has crossed "
+        "REVIEW_THRESHOLD so far -- same definition as step_up fired, one "
+        "threshold up. Matches the count of narratives shown below.",
+    )
+
+    graph_col, feed_col = st.columns([2, 1])
+    with graph_col:
+        st.markdown('<div class="panel-label">Entity graph, building incrementally</div>', unsafe_allow_html=True)
+        fig = dashboard_replay.build_incremental_figure(sequence, step)
+        st.plotly_chart(fig, use_container_width=True, key=f"replay_graph_{step}")
+        st.caption(
+            "A node appears the first time that uid transacts in this "
+            "window AND is a member of the real, train-derived entity "
+            "graph -- a uid with no train-period history has no position "
+            "in it (it still counts in the feed and counters, just not as "
+            "a graph node). An edge appears when a real linkage "
+            "relationship connects two already-revealed uids. The layout "
+            "is fixed once, upfront, over every uid this window will ever "
+            "reveal -- nodes never move as more of them appear."
+        )
+    with feed_col:
+        st.markdown('<div class="panel-label">Scored transaction feed</div>', unsafe_allow_html=True)
+        feed_df = dashboard_replay.feed_dataframe(sequence, step)
+        render_html_table(feed_df, max_height="420px")
+
+    review_events = dashboard_replay.review_events_through(sequence, step)
+    if review_events:
+        st.markdown(
+            f'<div class="panel panel-model">'
+            f'<div class="panel-label">{_badge("REVIEW", "review")} '
+            "Cluster(s) that crossed REVIEW_THRESHOLD so far -- the payoff "
+            "moment: a real cluster, its score crossing the line, and its "
+            "LLM narrative</div>",
+            unsafe_allow_html=True,
+        )
+        for ev in review_events:
+            cid = ev["cluster_id"]
+            explanation = sequence["narratives"].get(cid)
+            members_total = len(sequence["components"][cid])
+            source_kind = "llm" if explanation and explanation.source == "llm" else "fallback"
+            source_label = "claude-sonnet-4-6" if source_kind == "llm" else "template fallback (no LLM)"
+            narrative_text = explanation.narrative if explanation else "(no narrative available)"
+            st.markdown(
+                f'<div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid {BORDER};">'
+                f'<b>Cluster {cid}</b> ({members_total} real members total) -- crossed '
+                f'at replay transaction {ev["step"] + 1:,} &nbsp;'
+                f'{_badge(source_label, source_kind)}'
+                f'<div class="narrative-text" style="margin-top:6px;">{narrative_text}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.info(
+            "No cluster has crossed REVIEW_THRESHOLD yet at this point in "
+            "the replay -- press Play; this window guarantees at least one "
+            f"crossing by transaction {sequence['review_events'][0]['step'] + 1:,}."
+            if sequence["review_events"]
+            else "No REVIEW_THRESHOLD crossing occurs in this replay window."
+        )
+
+    if st.session_state.replay_playing and step < n_frames - 1:
+        st.session_state.replay_step = min(step + speed, n_frames - 1)
+        if st.session_state.replay_step >= n_frames - 1:
+            st.session_state.replay_playing = False
+        time.sleep(0.15)
+        st.rerun()
+    elif st.session_state.replay_playing:
+        st.session_state.replay_playing = False
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -920,13 +1084,17 @@ def main() -> None:
 
     pipeline_data, trained = load_pipeline_or_stop()
 
-    tab_queue, tab_perf, tab_audit = st.tabs(["Review queue", "Model performance", "Audit trail"])
+    tab_queue, tab_perf, tab_audit, tab_replay = st.tabs(
+        ["Review queue", "Model performance", "Audit trail", "Live replay"]
+    )
     with tab_queue:
         render_queue_tab(pipeline_data, trained)
     with tab_perf:
         render_performance_tab()
     with tab_audit:
         render_audit_tab()
+    with tab_replay:
+        render_replay_tab(pipeline_data, trained)
 
 
 if __name__ == "__main__":

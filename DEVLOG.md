@@ -1890,3 +1890,73 @@ this session's task description assumed 54, which was the count before
 the topology session added 3 -- noted rather than silently treated as a
 mismatch). No file under src/ or results/ touched -- confirmed by diff,
 not assumption -- so the pipeline's reported numbers are unchanged.
+
+## 2026-09-01 — Live replay tab (new, additive-only)
+
+Built a fourth tab, `dashboard_replay.py` + `render_replay_tab` in app.py:
+replays real held-out test-split transactions in their actual
+TransactionDT order, showing the pipeline exactly as it would run in
+production. Read `app.py` fully first per the task's instruction; no
+frozen file (`evaluate.py`, `entities.py`, `graph.py`, `model.py`,
+`investigator.py`, `policy.py`) and no existing tab or helper function
+was touched -- confirmed by `git diff app.py`, which shows only new
+imports, one new function, one new tab-wiring line, and a docstring
+update describing four tabs instead of three.
+
+**Precompute discipline.** `build_replay_sequence` runs once under
+`st.cache_data`: one vectorized `cluster_model.predict()` call, one
+`policy.apply_policy()` call, and a single plain-Python pass building
+per-transaction frames (score, action, new graph nodes/edges, running
+cluster-max-score bookkeeping). Per-frame rendering only ever indexes
+into that precomputed list -- no feature recomputation, no graph rebuild,
+no model call happens on Play/Pause/rerun. The node layout is a single
+`nx.spring_layout` computed once over every uid the window will ever
+reveal (benchmarked at 7.3s for 1446 nodes), so revealing nodes over time
+never moves an already-placed one.
+
+**Window choice, verified against real data before writing any UI code.**
+A throwaway diagnostic script found 10 real REVIEW_THRESHOLD crossings
+across the full 118,108-row test split, and that the first 2000
+chronological test transactions (matching the task's own suggested cap)
+contain 2 of them -- clusters 769 and 7255. Checked whether either
+crossing is a multi-member "group forming" story, since that's the payoff
+moment the task describes: both are single-revealed-member crossings,
+driven by that uid's cluster having a high `cluster_prior_fraud_share`
+from training, not a build-up. A larger window exists with a genuine
+5-member build-up (cluster 241, crossing at test-index 30512), but I kept
+the smaller/faster 2000-transaction window and said so honestly in the
+tab's caption instead of reaching for a bigger window to manufacture a
+better-looking story -- this is itself a live illustration of this
+project's own repeatedly-documented finding that `cluster_prior_fraud_share`
+dominates the score, not a shortcoming to hide.
+
+**A real bug, not just cleanup, found while re-reading my own draft
+before committing.** `build_incremental_figure` initialized every node's
+`any_fraud` to `False` and never updated it, so the "carried a
+fraud-labelled txn" legend entry was dead -- every non-highlighted node
+rendered as the same color regardless of its real label. The held-out
+test split (carved from train_transaction.csv, unlike the never-released
+Kaggle `test_transaction.csv`) does carry real `isFraud` labels, so this
+was fixable with real data, not synthesis: added `is_fraud` to each
+precomputed frame and folded it into `any_fraud` as frames are revealed.
+Re-verified after the fix: 91 of 2000 replayed transactions carry a real
+positive label, and the node trace now actually uses both risk colors.
+
+**Verification, driven not eyeballed** (explicitly called out by the task,
+after last session's queue-selection bug survived specifically because
+nobody drove the UI). First, a plain-Python logic script against the real
+trained pipeline (no browser): monotonic counters, correct
+step_up/review firing points, correct highlight-linewidth transition
+exactly at the crossing frame, both narratives real (`source="llm"`).
+Then Playwright, twice -- once before the `is_fraud` fix and once after,
+since the fix changed frame contents: load the app, switch tabs, click
+Play, poll to the end of the 2000-transaction window, confirm both
+Cluster 769 and Cluster 7255 narratives render, click Reset, confirm the
+counters and review panel clear, and confirm zero console/page errors
+throughout. Both full runs passed. (Minor Playwright-side friction, not
+app bugs: the speed slider's react-aria overlay blocks a direct
+`.click()`, so the test just runs at the default 15-txns/tick speed
+instead; `get_by_role("button", name="Reset")` collides with Plotly's own
+"Reset axes" modebar button and needs `exact=True`.)
+
+57/57 tests still pass; `git diff --stat -- src/ results/` is empty.
