@@ -1235,3 +1235,53 @@ one-time empirical finding baked into it, which is a meaningfully
 different kind of number from a live benchmark timing: it won't drift
 between pipeline runs the way wall-clock latency will, so quoting it here
 isn't the same category of risk the Performance-section fix was about.
+
+## 2026-09-01 — Task 6: final verification
+
+**Fresh clone, fresh venv, fresh install.** Cloned uid-and-graph into a new
+temp directory, created a brand-new venv, `pip install -r
+requirements.txt` from scratch (now including streamlit and its
+dependency tree from Task 1) -- all packages installed cleanly at the
+exact pinned versions, no resolver conflicts. Copied the already-downloaded
+CSVs into the clone's data/ rather than re-running the Kaggle download,
+same reasoning as every previous reproducibility check this project has
+done: re-testing the live download isn't the point of this check, and it
+adds an external dependency (credentials, network) to something that's
+really about code/environment reproducibility.
+
+**Pipeline: fully reproducible.** `pytest` -- 54 passed, matching exactly.
+`python -m src.run_pipeline` -- completed successfully. Every number
+matched the working directory's committed results exactly:
+results/ablation.md byte-identical, results/cost_curve.png and
+results/calibration.png identical MD5 hashes, baseline/cluster PR-AUC
+matching to the last printed decimal (0.5646104419855579 /
+0.6322404738191845). results/audit_sample.jsonl: 0 of 200 records differ
+once the (expectedly different) timestamp is excluded.
+results/investigator_eval.md legitimately differs -- the clone has no
+`ANTHROPIC_API_KEY`, so it correctly reports 0 of 30 explanations using
+the real LLM path, honestly labeled as such, not a bug.
+
+**Dashboard: renders from the clone with the original working directory
+absent.** Launched `streamlit run app.py` from inside the clone directory
+on a separate port, confirmed via Playwright screenshots that the review
+queue (same clusters, same priorities, same colors), and the audit trail
+tab (same 200 records) render identically to the working directory's own
+dashboard. Nothing in app.py references the original repo path -- it only
+ever uses `Path(__file__).resolve().parent`, which is exactly why this
+worked.
+
+**Git hygiene: clean.** `git ls-files data/` shows only `.gitkeep`; no
+`.csv`/`.pkl` tracked anywhere; no `.env` tracked; no filename matching
+credential/secret/token/key patterns; a repo-wide grep for an
+Anthropic-API-key-shaped string (`sk-ant-...`) found nothing tracked.
+`.streamlit/` contains only `config.toml` (no `secrets.toml`).
+
+**What failed, reported plainly, same as the last time this exact check
+was run:** `make` is still not installed on this Windows/Git-Bash
+environment. `make results` as literally written in the README does not
+run here -- the underlying command it wraps
+(`python -m src.run_pipeline`) does, and that's what both this check and
+the README's Reproduce section actually rely on. Not a regression and not
+fixed this session (installing system `make` isn't a code change); the
+README states this plainly rather than assuming `make` is universally
+available, per Task 4.
