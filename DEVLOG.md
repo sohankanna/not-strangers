@@ -1007,3 +1007,52 @@ measurement against actual LLM output, and I am not reporting one. That
 measurement still needs to happen in an environment where the credentials
 are actually reachable -- this entry fixes the mechanism for measuring it
 honestly; it does not itself contain that measurement.
+
+## 2026-08-31 — The real measurement: 100% groundedness on actual LLM output
+
+The user ran `scripts/eval_investigator.py` themselves, in an environment
+where `ANTHROPIC_API_KEY` and `ANTHROPIC_WORKSPACE_ID` are both genuinely
+set and working, and shared the resulting results/investigator_eval.md.
+This is the measurement the previous two entries explicitly said had not
+happened yet -- recorded here as soon as it existed, not reconstructed or
+approximated.
+
+**Result: 30 of 30 explanations used the real LLM path (source=llm,
+confirmed from the actual `sources` counter, not inferred). 0 of 182
+extracted numeric claims were ungrounded -- groundedness rate 100.00%.**
+Zero fallback explanations this run, so unlike every previous run, there's
+no fallback-vs-LLM split to worry about diluting the number: all 182
+claims are real claude-sonnet-4-6 output.
+
+Spot-checked the three example narratives by hand against their evidence
+dicts rather than just trusting the automated checker's own arithmetic:
+cluster-13 cites edge density 1.0, email-uid ratio 0.1429, 1 distinct email
+domain, 2 distinct product codes, amt_cv 1.0557, prior_fraud_share 0.0,
+burst_concentration 0.0909 -- every one matches its evidence dict value
+exactly. cluster-29 cites prior_fraud_share 1.0, edge_density 1.0, 2
+product codes, 2 email domains, email_uid_ratio 0.6667 -- same, all exact
+matches. The narratives also read as genuinely reasoned rather than just
+regurgitating the evidence dict in prose: cluster-13's read ("structural
+linkage and email concentration are the most concerning signals... though
+the absence of prior fraud history and low burst activity leave the risk
+assessment somewhat ambiguous") explicitly weighs signals against each
+other rather than asserting a flat verdict, which is exactly the kind of
+grounded-but-not-mechanical behavior the system prompt's hard rule was
+meant to allow room for.
+
+**What this does and doesn't establish.** It closes the loop the last two
+entries left open: the investigator layer has now actually been exercised
+against the real model, not just unit-tested against mocks, and the
+specific hard-number-grounding constraint this session was built around
+held on every single claim it produced. It does not establish that
+claude-sonnet-4-6 will always stay grounded -- this is one run, 30
+clusters, 182 claims, not a guarantee, and the honest posture from here is
+"measured clean on the one real run we have," not "proven safe." If this
+is re-run at higher volume or on a different cluster selection, the
+groundedness check should keep running every time, not be treated as a
+box now permanently checked.
+
+This also means the bug fixed two entries ago is now confirmed fixed
+end-to-end, not just plausible in theory: the workspace-id header was the
+actual blocker, and with it in place the same code path that produced 30
+silent failures now produces 30 real, grounded explanations.
