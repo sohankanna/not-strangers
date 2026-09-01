@@ -556,3 +556,40 @@ uncomfortable FPR at the "optimal" point; and a README that reflects all of
 it, including the parts that don't make the result look as clean as a
 single PR-AUC number would suggest. evaluate.py, entities.py, investigator.py
 and policy.py were never touched, as instructed.
+
+## 2026-08-31 — Task 1: investigator.py implemented
+
+LLM layer over the Anthropic API (model claude-sonnet-4-6). explain_cluster
+builds a flat evidence dict (build_evidence) from a cluster's member rows
+of graph.compute_cluster_features output plus their raw transactions, sends
+it to the model as a JSON code block (never prose) with a system prompt
+whose hard rule is "never state a number not present in this JSON verbatim
+or trivially rounded" -- stated explicitly as more important than the rest
+of the prompt, since that's the one constraint this session actually checks
+programmatically (Task 2, next). prioritize_clusters sorts by a simple,
+clearly-labeled heuristic priority_score (prior-fraud share weighted
+heaviest, txn volume and burst concentration as tie-breakers) -- explicitly
+not a policy decision, no thresholds, no actions.
+
+Graceful degradation: explain_cluster checks for ANTHROPIC_API_KEY before
+attempting a call, and wraps the actual API call in a bare
+`except Exception` -- either path returns a ClusterExplanation with
+source="ungrounded-fallback" and a narrative built by directly formatting
+the evidence dict's own values (grounded by construction, since it can't
+contain anything that isn't already a dict value). Never raises either way.
+6 tests, including one that monkeypatches `_call_anthropic` to raise and
+confirms the fallback still returns cleanly.
+
+**Important honest note for Task 2, which measures this module next:**
+`ANTHROPIC_API_KEY` is NOT set in this environment. Every explain_cluster
+call made in this session will take the fallback path. Task 2's
+"groundedness" measurement will therefore be measuring the deterministic
+fallback template (which is grounded by construction, since it's built by
+formatting the evidence dict directly) -- not the actual LLM's behavior
+under the prompt's hard-number rule. This is a real limitation of what this
+session can demonstrate, not something to paper over: the LLM-calling code
+path (_call_anthropic) is implemented and unit-tested with a mocked
+success case, but has never actually been exercised against the real API
+in this session. If a key is added later, re-running
+scripts/eval_investigator.py is what would produce a real measurement of
+the LLM's groundedness under the prompt.
