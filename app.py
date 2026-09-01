@@ -2,8 +2,12 @@
 
 An analyst-facing review queue, not a metrics showcase. Three tabs:
   - Review queue: clusters ranked by priority score, with a detail panel
-    for the selected cluster (LLM narrative, evidence, member uids, a
-    transaction timeline, and the policy decision).
+    for the selected cluster -- in order: the real entity graph (with an
+    optional side-by-side contrast against a similar-size non-flagged
+    cluster), MODEL score attribution (SHAP contribution, threshold
+    position, transaction-vs-cluster split), the LLM narrative, the
+    investigator.py evidence table, member uids, and a transaction
+    timeline.
   - Model performance: the ablation table, cost curve and calibration
     plot, parsed from results/ at runtime.
   - Audit trail: results/audit_sample.jsonl, filterable by action.
@@ -11,12 +15,16 @@ An analyst-facing review queue, not a metrics showcase. Three tabs:
 Attribution is load-bearing here, not decorative: CLAUDE.md's rule is
 "the LLM layer explains and prioritizes, policy.py decides, never merge
 them," and this UI is where that separation has to be legible to a human,
-not just true in the architecture. Every narrative shown is labeled with
-its actual source (the real Anthropic call, or the deterministic fallback
--- see investigator.py) and every action shown is labeled as a policy.py
-decision with the exact threshold that produced it. Nothing here is
-computed by "the dashboard" -- it's read from src/ and results/ at
-runtime, per this session's own rule against inventing numbers.
+not just true in the architecture. Every score attribution is labeled
+MODEL (src/model.py + SHAP), every decision is labeled POLICY (policy.py,
+with the exact threshold that produced it), and every narrative is
+labeled with its actual source (LLM or the deterministic fallback -- see
+investigator.py) -- three distinct badges, matching the three distinct
+things CLAUDE.md says must never be merged. Nothing here is computed by
+"the dashboard": every node, edge, score, and value is read from src/ and
+results/ at runtime (see dashboard_graph.py and dashboard_attribution.py
+for the two new rendering modules this session added), per this
+project's rule against inventing numbers.
 
 Run: streamlit run app.py
 """
@@ -41,21 +49,23 @@ sys.path.insert(0, str(REPO_ROOT))
 from src import investigator, policy, run_pipeline  # noqa: E402
 from src.graph import get_connected_components  # noqa: E402
 
+import dashboard_attribution  # noqa: E402
+import dashboard_graph  # noqa: E402
+from dashboard_theme import (  # noqa: E402
+    ACCENT,
+    BG,
+    BORDER,
+    MODEL_COLOR,
+    RISK_ALLOW,
+    RISK_REVIEW,
+    RISK_STEPUP,
+    SURFACE,
+    TEXT,
+    TEXT_MUTED,
+)
+
 RESULTS_DIR = REPO_ROOT / "results"
 MAKE_RESULTS_CMD = "python -m src.run_pipeline"
-
-# Palette -- mirrors .streamlit/config.toml; duplicated here because the
-# canvas-rendered matplotlib timeline and the hand-rolled HTML tables can't
-# read the Streamlit theme config directly.
-BG = "#0D0D0F"
-SURFACE = "#18181C"
-BORDER = "#2A2A2E"
-TEXT = "#E4E4E7"
-TEXT_MUTED = "#9A9AA5"
-ACCENT = "#5B7FBF"
-RISK_REVIEW = "#C4645C"
-RISK_STEPUP = "#B08D3E"
-RISK_ALLOW = "#6B7280"
 
 st.set_page_config(
     page_title="not-strangers",
@@ -104,6 +114,8 @@ def _inject_css() -> None:
         .badge-allow {{ background: rgba(107,114,128,0.20); color: {TEXT_MUTED}; }}
         .badge-llm {{ background: rgba(91,127,191,0.16); color: {ACCENT}; }}
         .badge-fallback {{ background: rgba(154,154,165,0.14); color: {TEXT_MUTED}; }}
+        .badge-model {{ background: rgba(74,155,138,0.16); color: {MODEL_COLOR}; }}
+        .badge-policy {{ background: rgba(154,154,165,0.14); color: {TEXT_MUTED}; }}
         /* ---- section framing ---- */
         .panel {{
             background: {SURFACE};
@@ -119,6 +131,14 @@ def _inject_css() -> None:
             text-transform: uppercase;
             color: {TEXT_MUTED};
             margin-bottom: 8px;
+        }}
+        .panel-model {{
+            border-left: 3px solid {MODEL_COLOR};
+        }}
+        .graph-note {{
+            font-size: 0.78rem;
+            color: {TEXT_MUTED};
+            margin-top: 6px;
         }}
         .narrative-text {{
             color: {TEXT};
@@ -479,6 +499,26 @@ def get_cluster_detail(_pipeline_data, cluster_id: int) -> dict:
     }
 
 
+@st.cache_data(show_spinner=False)
+def cluster_driving_transaction(_pipeline_data, _trained, cluster_id: int) -> int | None:
+    """The single real test-period transaction whose score drove this
+    cluster's queue action -- the same max() build_cluster_queue's
+    cluster_score already comes from (see that function's docstring).
+    Score attribution (Task 2) explains THIS transaction, not a synthetic
+    'cluster-level' row model.py was never trained to score.
+    """
+    full = annotated_transactions(_pipeline_data)
+    cluster_rows = full[full["cluster_id"] == cluster_id]
+    test_ids = cluster_rows.index.intersection(_trained.X_test_cluster.index)
+    if len(test_ids) == 0:
+        return None
+    scores = pd.Series(
+        _trained.cluster_model.predict(_trained.X_test_cluster.loc[test_ids]),
+        index=test_ids,
+    )
+    return int(scores.idxmax())
+
+
 def render_timeline(transactions_sub: pd.DataFrame):
     fig, ax = plt.subplots(figsize=(7.5, 2.1))
     fig.patch.set_facecolor(SURFACE)
@@ -487,7 +527,7 @@ def render_timeline(transactions_sub: pd.DataFrame):
     colors = [RISK_REVIEW if f == 1 else RISK_ALLOW for f in transactions_sub["isFraud"]]
     ax.scatter(day, transactions_sub["TransactionAmt"], c=colors, s=26, edgecolor="none", alpha=0.9)
     ax.set_xlabel("day (TransactionDT / 86400)", color=TEXT_MUTED, fontsize=8)
-    ax.set_ylabel("amount", color=TEXT_MUTED, fontsize=8)
+    ax.set_ylabel("amount ($)", color=TEXT_MUTED, fontsize=8)
     ax.tick_params(colors=TEXT_MUTED, labelsize=7)
     for spine in ax.spines.values():
         spine.set_color(BORDER)
@@ -500,7 +540,125 @@ def render_timeline(transactions_sub: pd.DataFrame):
 # Review queue tab
 # ---------------------------------------------------------------------------
 
-def render_cluster_detail(pipeline_data, cluster_id: int, queue_row: pd.Series) -> None:
+def _render_cluster_graph(pipeline_data, cluster_id: int, members: list[str], transactions_sub: pd.DataFrame, height: int = 480) -> None:
+    """One cluster's real entity-subgraph, rendered and made clickable.
+    Shared by the main detail view and the Task 3 contrast view so both
+    sides of a comparison use the identical rendering code.
+    """
+    fig, meta = dashboard_graph.build_cluster_network_figure(
+        pipeline_data.entity_graph.graph, members, transactions_sub, height=height,
+    )
+    if meta["sampled_note"]:
+        st.caption(f"Note: {meta['sampled_note']}")
+
+    event = st.plotly_chart(
+        fig, use_container_width=True, on_select="rerun",
+        key=f"graph_{cluster_id}_{height}_{len(members)}",
+    )
+    points = event.selection.points if event and event.selection else []
+    if points:
+        uid_clicked = points[0].get("customdata")
+        if isinstance(uid_clicked, (list, tuple)) and uid_clicked:
+            uid_clicked = uid_clicked[0]
+        per_uid = meta["per_uid"]
+        if uid_clicked is not None and uid_clicked in per_uid.index:
+            stats = per_uid.loc[uid_clicked]
+            st.markdown(
+                f'<div class="graph-note">Selected node <span class="mono">{uid_clicked}</span>: '
+                f'<b>{int(stats["txn_count"])}</b> transactions, amount range '
+                f'<b>${stats["amt_min"]:,.2f}-${stats["amt_max"]:,.2f}</b>, '
+                f'{"carried a fraud-labelled txn" if stats["any_fraud"] else "no fraud-labelled txn"}.</div>',
+                unsafe_allow_html=True,
+            )
+    st.caption(
+        f"{meta['n_nodes_shown']} nodes / {meta['n_edges_shown']} edges shown "
+        f"(of {meta['n_members_total']} cluster members). Hover a node for its "
+        "transaction count and amount range; click to pin that info above. "
+        "Edge color = which linkage rule created it; node color = whether "
+        "that uid carried a fraud-labelled transaction; node size = "
+        "transaction count."
+    )
+
+
+def render_score_attribution(pipeline_data, trained, cluster_id: int, action: str) -> None:
+    """Task 2: SHAP contribution, threshold position, and the
+    transaction-vs-cluster split -- all computed from the real trained
+    cluster model against the one real test-period transaction that drove
+    this cluster's queue action. Labeled MODEL, distinct from the LLM
+    narrative below it (same source-attribution convention as the
+    POLICY/LLM badges elsewhere on this page).
+    """
+    st.markdown(
+        f'<div class="panel panel-model">'
+        f'<div class="panel-label">{_badge("MODEL", "model")}&nbsp;&nbsp;Score attribution -- '
+        f"src/model.py's trained cluster model, via SHAP. Not the LLM, not policy.py.</div>",
+        unsafe_allow_html=True,
+    )
+
+    txn_id = cluster_driving_transaction(pipeline_data, trained, cluster_id)
+    if txn_id is None:
+        st.caption(
+            "No test-period transaction available for this cluster -- "
+            "nothing to attribute (this cluster shouldn't normally reach "
+            "the queue without one; flagged here rather than silently "
+            "showing nothing)."
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    x_row = trained.X_test_cluster.loc[[txn_id]]
+    score = float(trained.cluster_model.predict(x_row)[0])
+
+    try:
+        explainer = dashboard_attribution.get_shap_explainer(trained.cluster_model)
+        shap_row, expected_value = dashboard_attribution.compute_shap_row(explainer, x_row)
+    except Exception as exc:  # SHAP is real, external computation -- report failures plainly
+        st.warning(f"SHAP explanation unavailable for this transaction: {type(exc).__name__}: {exc}")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    st.caption(
+        f"Attribution for transaction `{txn_id}` -- the one real test-period "
+        f"transaction whose score ({score:.4f}) drove this cluster's action "
+        "(matching the score shown above)."
+    )
+
+    shap_col, side_col = st.columns([3, 2])
+    with shap_col:
+        st.markdown('<div class="panel-label">SHAP contribution (top 12 by |value|)</div>', unsafe_allow_html=True)
+        st.pyplot(dashboard_attribution.build_shap_bar_figure(shap_row), use_container_width=True)
+        st.caption(
+            "Log-odds (margin) space -- positive pushes toward fraud, "
+            "negative pulls away. expected_value (baseline, no features) = "
+            f"{expected_value:+.4f}."
+        )
+    with side_col:
+        st.markdown('<div class="panel-label">Threshold position</div>', unsafe_allow_html=True)
+        st.pyplot(dashboard_attribution.build_threshold_figure(score, action), use_container_width=True)
+        st.caption(
+            "STEP_UP_THRESHOLD and REVIEW_THRESHOLD read live from "
+            "src/policy.py -- never hardcoded here."
+        )
+
+        split = dashboard_attribution.txn_vs_cluster_split(
+            shap_row, set(run_pipeline.CLUSTER_FEATURE_COLUMNS)
+        )
+        st.markdown('<div class="panel-label" style="margin-top:14px;">Transaction vs. cluster contribution</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:0.85rem;color:{TEXT};line-height:1.6;">'
+            f'Cluster features ({split["n_cluster_features"]}): '
+            f'<b>{split["cluster_sum"]:+.4f}</b> log-odds '
+            f'({split["cluster_abs_pct"]:.0f}% of attribution magnitude)<br>'
+            f'Transaction features ({split["n_txn_features"]}): '
+            f'<b>{split["txn_sum"]:+.4f}</b> log-odds '
+            f'({split["txn_abs_pct"]:.0f}% of attribution magnitude)'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_cluster_detail(pipeline_data, trained, cluster_id: int, queue_row: pd.Series, queue: pd.DataFrame) -> None:
     detail = get_cluster_detail(pipeline_data, cluster_id)
     explanation = detail["explanation"]
     members = detail["members"]
@@ -510,7 +668,7 @@ def render_cluster_detail(pipeline_data, cluster_id: int, queue_row: pd.Series) 
 
     action = queue_row["action"]
     st.markdown(
-        f'{_badge(action.upper(), action)} &nbsp;'
+        f'{_badge(action.upper(), action)} &nbsp;{_badge("POLICY", "policy")} &nbsp;'
         f'<span class="mono" style="color:{TEXT_MUTED};font-size:0.85rem;">'
         f'score {queue_row["cluster_score"]:.4f} against threshold '
         f'{queue_row["threshold_applied"]:.4f}</span>',
@@ -520,6 +678,39 @@ def render_cluster_detail(pipeline_data, cluster_id: int, queue_row: pd.Series) 
         f"Decided by **policy.py** (deterministic, score-vs-threshold) -- "
         f"see src/policy.py. Not the language model."
     )
+
+    st.markdown('<div class="panel-label">Entity graph -- real linkage among this cluster\'s members</div>', unsafe_allow_html=True)
+    show_contrast = st.checkbox(
+        "Show contrast: a similar-size non-flagged (allow) cluster beside this one",
+        value=False,
+        key=f"contrast_{cluster_id}",
+        help=(
+            "Off by default. Renders a second real cluster from the current "
+            "queue -- the closest-in-size one policy.py decided \"allow\" -- "
+            "using the identical graph rendering, for visual comparison only."
+        ),
+    )
+    if show_contrast:
+        graph_col_a, graph_col_b = st.columns(2)
+        with graph_col_a:
+            st.caption(f"Flagged: cluster {cluster_id} ({action}), {len(members)} members")
+            _render_cluster_graph(pipeline_data, cluster_id, members, transactions_sub, height=380)
+        with graph_col_b:
+            contrast_row = dashboard_graph.find_contrast_cluster(queue, len(members), cluster_id)
+            if contrast_row is None:
+                st.info("No comparably-sized non-flagged (allow) cluster found in the current queue.")
+            else:
+                contrast_id = int(contrast_row["cluster_id"])
+                contrast_detail = get_cluster_detail(pipeline_data, contrast_id)
+                st.caption(f"Not flagged: cluster {contrast_id} (allow), {len(contrast_detail['members'])} members")
+                _render_cluster_graph(
+                    pipeline_data, contrast_id, contrast_detail["members"],
+                    contrast_detail["transactions"], height=380,
+                )
+    else:
+        _render_cluster_graph(pipeline_data, cluster_id, members, transactions_sub, height=480)
+
+    render_score_attribution(pipeline_data, trained, cluster_id, action)
 
     source_kind = "llm" if explanation.source == "llm" else "fallback"
     source_label = "claude-sonnet-4-6" if explanation.source == "llm" else "template fallback (no LLM)"
@@ -540,7 +731,7 @@ def render_cluster_detail(pipeline_data, cluster_id: int, queue_row: pd.Series) 
 
     col_a, col_b = st.columns([1, 1])
     with col_a:
-        st.markdown('<div class="panel-label">Evidence (drove the score)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-label">Evidence (investigator.py\'s inputs for the narrative and priority_score -- not the MODEL score above)</div>', unsafe_allow_html=True)
         evidence_df = pd.DataFrame(
             [{"feature": k, "value": v} for k, v in explanation.evidence.items()]
         )
@@ -566,7 +757,10 @@ def render_queue_tab(pipeline_data, trained) -> None:
         st.markdown('<div class="panel-label">Cluster queue, ranked by priority</div>', unsafe_allow_html=True)
         st.caption(
             f"Top {len(queue)} of the multi-uid clusters with test-period "
-            "activity, by investigator.py's priority_score."
+            "activity, ranked by investigator.py's priority_score. The "
+            "`action` column is policy.py's real decision (score vs. fixed "
+            "threshold) for that cluster's highest-scored transaction, not "
+            "the priority ranking itself -- the two can and do disagree."
         )
         display_cols = ["cluster_id", "uid_count", "txn_count", "action", "priority_score"]
         risk_colors = {"review": RISK_REVIEW, "step_up": RISK_STEPUP, "allow": RISK_ALLOW}
@@ -582,6 +776,7 @@ def render_queue_tab(pipeline_data, trained) -> None:
             height=560,
             on_select="rerun",
             selection_mode="single-row",
+            key="cluster_queue_df",
             column_config={
                 "cluster_id": st.column_config.NumberColumn("cluster", format="%d"),
                 "uid_count": st.column_config.NumberColumn("uids", format="%d"),
@@ -595,7 +790,7 @@ def render_queue_tab(pipeline_data, trained) -> None:
     with right:
         if selected:
             row = queue.iloc[selected[0]]
-            render_cluster_detail(pipeline_data, int(row["cluster_id"]), row)
+            render_cluster_detail(pipeline_data, trained, int(row["cluster_id"]), row, queue)
         else:
             st.info("Select a cluster from the queue on the left to see its detail.")
 
@@ -612,6 +807,12 @@ def render_performance_tab() -> None:
     tables = parse_markdown_tables(ablation_text)
 
     st.markdown('<div class="panel-label">Ablation: transaction-only vs. cluster-augmented</div>', unsafe_allow_html=True)
+    st.caption(
+        "Does adding cluster-derived features actually improve fraud "
+        "detection over transaction data alone? Parsed live from "
+        "results/ablation.md -- nothing on this tab is computed by the "
+        "dashboard itself."
+    )
     results_table = get_table(tables, "Results")
     reablation_table = get_table(tables, "Ablation re-run")
     if results_table is not None:
@@ -687,10 +888,19 @@ def render_audit_tab() -> None:
     audit_df = pd.DataFrame(records)
     audit_df["feature_values"] = audit_df["feature_values"].apply(json.dumps)
 
+    st.caption(
+        f"{_badge('POLICY', 'policy')} Every row is a real policy.py decision "
+        "(score vs. fixed threshold) on a real test-period transaction -- "
+        "not an LLM narrative, not this session's MODEL/SHAP attribution "
+        "(see the Review queue tab's cluster detail for that). Kept for "
+        "compliance: which decision was made, on what score, against which "
+        "threshold, when.",
+        unsafe_allow_html=True,
+    )
     actions = sorted(audit_df["action"].unique())
     selected_actions = st.multiselect("Filter by action", actions, default=actions)
     filtered = audit_df[audit_df["action"].isin(selected_actions)]
-    st.caption(f"Showing {len(filtered):,} of {len(audit_df):,} audit records from results/audit_sample.jsonl.")
+    st.caption(f"Showing {len(filtered):,} of {len(audit_df):,} audit records from results/audit_sample.jsonl. `score` is the model's predicted fraud probability (0-1).")
 
     display_cols = ["transaction_id", "uid", "score", "threshold_applied", "action", "reason", "model_version", "timestamp"]
     render_html_table(filtered[display_cols], max_height="620px")
@@ -703,7 +913,10 @@ def render_audit_tab() -> None:
 def main() -> None:
     _inject_css()
     st.title("not-strangers")
-    st.caption("Coordinated payment abuse review console -- ML scores, an LLM explains, policy.py decides.")
+    st.caption(
+        "Coordinated payment abuse review console -- ML scores (predicted "
+        "fraud probability, 0-1), an LLM explains, policy.py decides."
+    )
 
     pipeline_data, trained = load_pipeline_or_stop()
 

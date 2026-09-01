@@ -1796,3 +1796,97 @@ read; it's a fairly settled negative result for this specific dataset and
 sample size, and README.md now says so as plainly as the Result section
 and Limitations bullet format (bold headline, two sentences, link out)
 allow.
+
+## 2026-09-01 -- Tasks 1-5: the dashboard shows a ring now, not just a table of numbers describing one
+
+**What was built.** Three new files (`dashboard_theme.py`,
+`dashboard_graph.py`, `dashboard_attribution.py`) plus changes to app.py.
+Cluster detail now renders, in order, above the LLM narrative: (1) a real
+plotly network graph of the cluster's actual entity-graph subgraph --
+nodes sized by transaction count, colored by whether that uid carried a
+fraud-labelled transaction, edges colored by which linkage rule
+(device/addr+email/card+bank+addr) created them, with a legend, hover
+tooltips, and click-to-pin node stats; clusters over 60 members get
+sampled to their 60 highest-transaction-count members with a visible
+note, never silently; (2) a MODEL-badged score-attribution block -- a
+SHAP TreeExplainer (built once, `st.cache_resource`, never per selection)
+against the real transaction whose score actually drove the cluster's
+queue action, a top-12 contribution bar chart, a 0-1 threshold-position
+chart reading `STEP_UP_THRESHOLD`/`REVIEW_THRESHOLD` live from
+`src/policy.py` (never hardcoded), and the transaction-vs-cluster SHAP
+split -- the project's central claim (clusters carry signal beyond the
+raw transaction) made visible per decision, not just in aggregate
+ablation numbers; (3) an off-by-default contrast toggle that renders a
+second, real "allow"-decided cluster of the closest available size next
+to the flagged one, using the identical graph-rendering code for both
+sides. Added `plotly==5.24.1` to requirements.txt (matplotlib alone can't
+give real hover/click; verified pip could actually resolve it before
+committing to the dependency).
+
+**What broke, and what I did before assuming anything.** Before writing
+any UI code, I checked whether `model.build_feature_matrix`'s
+`X.join(cluster_features)` (unconditional, no fixed column list) would
+matter here -- it doesn't, since this session touches no frozen file and
+adds no columns to `compute_cluster_features`; that check was really a
+carry-over habit from the topology session, confirmed irrelevant here and
+moved on. The real find was upstream of my new code entirely: I could not
+get Playwright to select a cluster in the (pre-existing, untouched-by-me)
+queue table no matter what I clicked, and checked
+`docs/screenshot_detail.png` from a *previous* session's supposedly-
+successful capture -- it also shows the unselected placeholder. This
+row-selection interaction had never actually worked, in any session,
+including the one that generated that screenshot. Root cause, found by
+testing rather than assuming: `st.dataframe(styled_queue, ...)` had no
+explicit `key=`, and a fresh `Styler` object is constructed on every
+rerun; Streamlit apparently can't recognize that as "the same widget"
+across the rerun the click itself triggers, so it reset the selection
+before `render_cluster_detail` ever ran. Added `key="cluster_queue_df"`.
+Verified the fix directly: a raw coordinate click plus polling for the
+detail pane's own content (not a fixed sleep) now reliably reaches
+"Score attribution," a real SHAP chart, and a real network graph. This
+was a genuine, previously-undiscovered bug blocking the dashboard's core
+interactivity, not something introduced this session -- fixed because
+nothing in Tasks 1-3 would have been reachable by a real user otherwise.
+
+**Verification, not assumption.** Before touching the browser at all,
+wrote a plain-Python (no Streamlit, no Playwright) script exercising
+every new function against the real trained pipeline: graph rendering on
+the actual largest cluster (171 members, correctly sampled to 60 with a
+note) and an actual 2-member cluster (no sampling, correct degenerate-case
+values); SHAP computation on a real queue cluster's real driving
+transaction, confirming `sum(shap_values) + expected_value` equals the
+model's own raw-margin prediction exactly; the transaction/cluster split
+summing back to `shap_row.sum()`; and `find_contrast_cluster` finding an
+exact same-size (27-uid) real "allow" cluster. All of this passed before
+a single Playwright click was attempted -- separating "is the logic
+correct" from "did the click land," which turned out to be two entirely
+different problems.
+
+**Task 4 (coherence pass).** Read every tab as a first-time reviewer:
+added one-line what/why captions to the Model performance and Audit
+trail tabs (neither had one); clarified that the queue's `action` column
+is policy.py's decision on the cluster's highest-scored transaction, not
+the priority ranking itself (the two can and do disagree); added an
+explicit POLICY badge and framing sentence to the Audit trail tab, which
+showed real policy decisions with no source attribution at all; labeled
+`score` as "predicted fraud probability, 0-1" once, prominently, rather
+than repeating a units caveat on every table; added a "($)" unit to the
+transaction timeline's amount axis; and reworded the Evidence panel's
+label so it can't be confused with the new MODEL score-attribution block
+above it (both were, before this session, just "the drove-the-score
+numbers," which is now two different, clearly-attributed things).
+
+**Task 5.** Regenerated all three docs/ screenshots with the fixed
+`scripts/capture_screenshots.py` (same key-selection fix, plus polling
+instead of a fixed sleep, plus a taller 2200px viewport so the graph and
+MODEL attribution block fit in one shot). Caught one more timing bug on
+the first re-run: the queue screenshot was captured empty -- the "loaded"
+text appears before the canvas grid finishes painting its rows, a
+separate async step. Added a short settle delay before that specific
+capture. Re-ran and verified all three visually.
+
+54/54 -> 57/57 tests still pass (57 is the current, correct baseline;
+this session's task description assumed 54, which was the count before
+the topology session added 3 -- noted rather than silently treated as a
+mismatch). No file under src/ or results/ touched -- confirmed by diff,
+not assumption -- so the pipeline's reported numbers are unchanged.

@@ -24,7 +24,7 @@ cross-split breakdown: [results/ablation.md](results/ablation.md),
 
 ## Screenshots
 
-| Review queue | Cluster detail |
+| Review queue | Cluster detail (entity graph + MODEL/SHAP attribution) |
 |---|---|
 | ![Review queue](docs/screenshot_queue.png) | ![Cluster detail](docs/screenshot_detail.png) |
 
