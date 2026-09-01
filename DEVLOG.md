@@ -1145,3 +1145,26 @@ narrative/policy attribution, the action-column coloring, and the
 error/empty states were each checked against an actual screenshot before
 moving on, per this session's own instruction to test UI changes in a
 browser rather than claim success from type-checking alone.
+
+## 2026-09-01 — Task 3: screenshots
+
+scripts/capture_screenshots.py launches `streamlit run app.py` as a
+subprocess on a scratch port, waits for the one-time pipeline load, and
+uses Playwright (headless Chromium) to capture the review queue, a
+cluster detail view (first queue row selected), and the model performance
+tab into docs/, then tears the subprocess down. Not wired into `make
+results` or requirements.txt -- this is a one-off authoring tool for the
+README, not something the pipeline or dashboard needs at runtime;
+playwright/chromium were installed ad hoc for this and for live-testing
+app.py during Task 1+2, documented in the script's own docstring rather
+than silently added as a project dependency.
+
+Screenshots are real: same server, same real data, same real LLM/fallback
+behavior as every other verification this session -- not mocked or
+hand-assembled.
+
+No corrections needed for the script itself -- it worked on the first
+run (the styling fix from Task 1+2 was still in flight when this was
+first written, so the first capture predated it slightly; a second run
+after that edit landed produced the final, correct screenshots, confirmed
+by inspecting all three images before committing).
