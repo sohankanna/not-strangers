@@ -13,6 +13,8 @@ Cost assumptions are illustrative, NOT Razorpay figures: cost_fn=500 (a missed a
 
 Cluster model vs. baseline: PR-AUC +0.0676, recall@1%FPR +0.0785, cost per 10k -3922.68 (negative is better for cost). Reported as-is; the derivation and features were not adjusted after seeing these numbers.
 
+**This +0.0676 figure is a single-split measurement and must be read alongside the cross-split range, never alone.** results/stability.md re-ran this same ablation (fresh graph, fresh causal cluster features, fresh models -- nothing cached) at 4 rolling temporal splits (60/70/80/90% through sorted TransactionDT). Full lift across those splits: mean **+0.0516**, spread **0.0393** -- directionally consistent (positive at every split), but the swing is a large fraction of the mean itself, so +0.0676 should be read as one sample from a noisy range, not a fixed number. Residual lift with `cluster_prior_fraud_share` removed (the 0.5756-PR-AUC row in section 3 below is this same measurement, on this one split): mean **+0.0060**, spread **0.0230**, and it **changes sign** across splits (negative at 60% and 90%, positive at 70% and 80%). Corrected, not softened: the structural/graph features on their own (edge density, velocity, burst concentration, email heterogeneity, cluster size) do not show a reliable lift on this dataset at this sample size. See results/stability.md for the full per-split table.
+
 ## Hyperparameters (identical for both models)
 
 ```
@@ -125,6 +127,8 @@ Same training path (train_cluster_model, identical hyperparameters and seed), sa
 | model | PR-AUC | Recall @ 1% FPR | Cost per 10k txns |
 |---|---:|---:|---:|
 | cluster (no cluster_prior_fraud_share) | 0.5756 | 0.4951 | 29317.66 |
+
+**This 0.5756 is the same single split as everything else in this report.** results/stability.md repeated this exact re-ablation (no `cluster_prior_fraud_share`) at 4 rolling temporal splits and found the resulting lift over baseline is mean +0.0060, spread 0.0230, changing sign across splits (negative at 60%/90%, positive at 70%/80% -- this row's split). Read in isolation, 0.5756 vs. 0.5646 looks like a small, genuine, consistently positive residual effect; across splits it isn't reliably positive at all. See results/stability.md and README.md's Result section for the full correction.
 
 ### 4. Cluster assignment for a test-period transaction never depends on test-period edges
 

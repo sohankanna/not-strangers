@@ -21,15 +21,33 @@ calibration are in [results/ablation.md](results/ablation.md).
 **Read the third row before the first one.** About 84% of the headline
 PR-AUC lift (+0.0676) comes from a single feature,
 `cluster_prior_fraud_share` -- without it, the lift is +0.0110 PR-AUC
-(0.5756 vs. 0.5646). That feature was traced end to end and confirmed not
-to leak test-period labels (checked against all 155,579 clusters, not
-spot-checked -- see results/ablation.md's Sanity checks section), but its
-predictive power leans heavily on this dataset's label-propagation
-dynamic (a chargeback on one transaction retroactively marks the rest of
-that card's history as fraud), not on an independently-discovered abuse
-signal. The remaining structural/graph features -- edge density, velocity,
-burst concentration, email heterogeneity, cluster size -- contribute a
-smaller but genuine residual lift on their own. See Limitations below.
+(0.5756 vs. 0.5646) on this split. That feature was traced end to end and
+confirmed not to leak test-period labels (checked against all 155,579
+clusters, not spot-checked -- see results/ablation.md's Sanity checks
+section), but its predictive power leans heavily on this dataset's
+label-propagation dynamic (a chargeback on one transaction retroactively
+marks the rest of that card's history as fraud), not on an
+independently-discovered abuse signal. See Limitations below.
+
+**The +0.0676 figure above is a single split; it should never be read
+alone.** Re-running the full ablation at 4 rolling temporal splits
+(60/70/80/90% through sorted `TransactionDT` -- see
+[results/stability.md](results/stability.md)) gives: full lift **mean
++0.0516 across the 4 splits, spread 0.0393** -- directionally consistent
+(positive at every split) and larger than the single 0.68-point figure by
+itself would suggest is stable, but with real swing. **Correction, not a
+softening:** this project previously described the residual lift once
+`cluster_prior_fraud_share` is removed as "a smaller but genuine residual
+lift" from the remaining structural/graph features (edge density,
+velocity, burst concentration, email heterogeneity, cluster size). That
+claim does not hold up. Across the same 4 splits, the residual lift is
+**mean +0.0060, spread 0.0230, and changes sign** (negative at 60% and
+90%, positive at 70% and 80%). Graph-structure features alone do not show
+a reliable lift on this dataset at this sample size -- only
+`cluster_prior_fraud_share` shows a consistently positive effect across
+splits, and per the Limitations note below, that effect is itself partly
+circular. Full per-split numbers are in
+[results/stability.md](results/stability.md).
 
 ## Queue-level evaluation
 
@@ -128,17 +146,28 @@ Full detail, including the linkage rules and the batch/inline split, is in
 
 ## Limitations
 
-- **Label noise, and its interaction with the dominant feature.** Labels
-  are chargeback-reported and, per how this dataset is constructed,
-  propagate across a card once one transaction on it is reported -- a
-  single confirmed chargeback can retroactively paint every other
-  transaction on that card as fraud, whether or not each one actually was.
+- **Label noise, and its interaction with the dominant feature.** Stated
+  plainly: the dominant feature, `cluster_prior_fraud_share`, is
+  backward-looking fraud history, not a forward-looking abuse signal --
+  it is powerful but partly circular in a chargeback-labelled dataset,
+  because it partly measures label propagation across a card rather than
+  independently discovering coordinated abuse. Labels are
+  chargeback-reported and, per how this dataset is constructed, propagate
+  across a card once one transaction on it is reported -- a single
+  confirmed chargeback can retroactively paint every other transaction on
+  that card as fraud, whether or not each one actually was.
   `cluster_prior_fraud_share`, the single largest driver of the measured
   lift (see Result above), is close to a direct measurement of this same
   propagation dynamic ("has this persistent card-identity already been
   caught"). That makes it a legitimate, non-leaking feature, not an
   independently-discovered abuse signal -- the model is partly learning
-  to reproduce the label-generation process itself.
+  to reproduce the label-generation process itself. This matters more
+  than it looks: results/stability.md found that the *other* cluster
+  features (everything left once `cluster_prior_fraud_share` is removed)
+  do not show a reliable lift across rolling temporal splits at all --
+  see the Result section above -- so this one backward-looking,
+  partly-circular feature is carrying essentially all of the reliably
+  measured lift, not just the largest share of it.
 - **The uid over-merges.** `card1_addr1_origin_day` is a stable, highly
   label-pure identifier (98.53% of multi-transaction uids are label-pure,
   weighted 97.61% -- see results/uid_validation.md), but stability is not

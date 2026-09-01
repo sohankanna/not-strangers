@@ -1506,3 +1506,58 @@ this mapping is illustrative of a generic Indian payments stack, not a
 description of Razorpay's actual systems -- nothing here claims internal
 knowledge this project doesn't have. No code, no new claims about the
 pipeline's own numbers, and nothing in src/ touched.
+
+## 2026-09-01 -- Task 5: measuring stability invalidated a claim I had already published in the README
+
+**What happened.** Task 3's stability check (results/stability.md) found
+that the residual lift -- PR-AUC gained from the structural/graph
+features alone, with `cluster_prior_fraud_share` removed -- changes sign
+across the 4 rolling splits (mean +0.0060, spread 0.0230: negative at
+60%/90%, positive at 70%/80%). I flagged that finding plainly in
+results/stability.md's own text when I wrote it, and then, in the same
+session, left README.md's Result section still asserting "the remaining
+structural/graph features ... contribute a smaller but genuine residual
+lift on their own" -- a sentence I had written earlier this project,
+based on exactly one split, that my own later measurement had already
+shown didn't hold. I didn't go back and fix it until asked to. That gap
+-- computing the correction and then not immediately propagating it to
+the document making the claim -- is the mistake worth recording here, not
+the original single-split claim itself (which was reasonable given what
+was known when it was written).
+
+**What was corrected, precisely.** README.md's Result section and
+results/ablation.md's Results section (both, per the request -- this
+claim was published in two places, not one) now state, every time the
++0.0676 single-split lift is presented: the full lift's cross-split mean
+(+0.0516) and spread (0.0393, directionally consistent but a large swing
+relative to the mean), and the residual lift's cross-split mean (+0.0060)
+and spread (0.0230) *with the sign flip stated explicitly, not
+paraphrased into "noisy."* The "smaller but genuine residual lift"
+sentence is gone; it's replaced with "does not show a reliable lift on
+this dataset at this sample size." The +0.0676 and 0.5756 single-split
+figures themselves are untouched -- they're real, reproducible numbers
+from a real run, not the thing that was wrong. What was wrong was
+presenting them without the range that shows how much they move.
+
+**Limitations section addition.** Added a plain opening statement to the
+existing "Label noise, and its interaction with the dominant feature"
+bullet: `cluster_prior_fraud_share` is backward-looking fraud history,
+powerful but partly circular in a chargeback-labelled dataset, since it
+partly measures label propagation across a card rather than
+independently discovering abuse. The bullet already said something like
+this in more hedged language ("close to a direct measurement," "partly
+learning to reproduce the label-generation process"); this adds the
+direct version on top, plus a new closing sentence connecting it to the
+stability finding -- since the other cluster features don't show a
+reliable lift, this one backward-looking, partly-circular feature is now
+carrying essentially all of the reliably-measured lift, not just the
+largest share of it. That's a stronger and more precise claim than the
+bullet made before this session.
+
+**No pipeline files touched, nothing re-run.** Per the explicit
+instruction: the correction is the finding, not a reason to go looking
+for a better split. results/ablation.md and README.md were edited
+directly with already-computed, already-published numbers from
+results/stability.md -- the same pattern this project already uses
+elsewhere for prose that cites another report's figures (e.g. README's
+uid-validation numbers), not a new "hand-invented number" exception.
