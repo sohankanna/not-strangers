@@ -849,3 +849,58 @@ re-appending, applied to both the ARCHITECTURE.md path and (defensively)
 the full pipeline twice in a row and confirming exactly one "## Performance"
 section and one each of the three ablation.md subsections both times, with
 identical model metrics both runs.
+
+## 2026-08-31 — Task 7 (part 2): reproducibility verification
+
+Cloned the uid-and-graph branch (`git clone --branch uid-and-graph
+--single-branch`) into a fresh temp directory, created a brand-new venv
+inside the clone, and `pip install -r requirements.txt` from scratch --
+all packages installed cleanly at the exact pinned versions with no
+resolver conflicts (same pins verified back in the very first scaffolding
+session: pandas 3.0.5, numpy 2.5.0, scikit-learn 1.9.0, lightgbm 4.6.0,
+networkx 3.6.1, matplotlib 3.11.1, shap 0.52.0, anthropic 0.120.2,
+pytest 9.1.1).
+
+**One step failed and is worth reporting plainly: `make results` does not
+run on this machine, because GNU Make isn't installed at all** (`which
+make` finds nothing on this Windows/Git-Bash setup). The README's
+"Reproduce: `make results`" line assumes a Unix-like environment with make
+available (a dev container, CI, macOS/Linux) -- on a bare Windows checkout
+without WSL or make installed via a separate package manager, a reviewer
+hits this immediately. Since the Makefile's `results` target is exactly
+`python -m src.run_pipeline`, that command was run directly instead, which
+is what actually verifies the pipeline -- but the `make` wrapper itself
+was not exercised, and this is a real gap for a Windows-only reviewer, not
+a hypothetical one.
+
+data/ is (correctly) empty in a fresh clone -- CLAUDE.md's "do not commit
+anything under data/" rule working as intended, but it also means a fresh
+clone cannot run the pipeline until the two CSVs exist locally. Copied
+train_transaction.csv and train_identity.csv from the already-downloaded
+copy in the main working directory into the clone's data/ rather than
+re-running scripts/download_data.sh against Kaggle again -- re-testing the
+live Kaggle download wasn't the point of this check (it was already
+exercised when the data was first fetched, see the entities.py session's
+DEVLOG entry) and would have added a real external dependency (valid
+credentials, competition rules accepted, network access) to a check that's
+really about the code and environment being reproducible. Worth being
+explicit that this means the download step itself was not re-verified here.
+
+With data/ populated: `pytest tests/` -- **47 passed**, matching the
+working directory exactly. `python -m src.run_pipeline` -- **completed
+successfully**, and every number matched the working directory's committed
+results exactly: results/ablation.md byte-identical, results/cost_curve.png
+and results/calibration.png identical MD5 hashes, baseline/cluster
+PR-AUC/recall/cost all identical to the last decimal printed
+(0.5646104419855579 / 0.6322404738191845 for PR-AUC, matching bit for bit).
+
+**Summary: the pipeline itself is fully reproducible from a fresh clone,
+fresh venv, and fresh pip install, given the two source CSVs are present.
+The one broken step is `make` not existing on this Windows environment** --
+not a code bug, but a real onboarding gap between what the README promises
+and what a plain Windows checkout can do without additional setup (installing
+make, or just running `python -m src.run_pipeline` directly as documented
+here). Not fixed this session (installing system-level `make` is outside
+what a code change can do, and rewriting the Makefile as something
+Windows-native wasn't asked for) -- reported plainly instead, per this
+session's own instructions.
