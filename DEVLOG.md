@@ -1193,3 +1193,45 @@ new to check here beyond making sure the transcription matched the
 source exactly, which it does (diffed by eye against results/ablation.md,
 results/investigator_eval.md, results/uid_validation.md, and
 results/d1_investigation.md while writing).
+
+## 2026-09-01 — Task 5: ARCHITECTURE.md completion
+
+Wrote the pipeline overview, the batch/inline split (with the actual
+reasoning for why each stage is on the side it's on, not just a label),
+the linkage rules table with their rationale (pulled verbatim from
+graph.py's own LinkageRule dataclasses, not re-explained from memory),
+the causal feature computation section (what CLAUDE.md's causality rule
+means concretely and how it was verified against real data, not just
+argued from the code), and the ML/LLM/policy boundary (the same
+structural separation documented in policy.py's own docstring, restated
+here with the dashboard's UI-level enforcement added since that's new
+this session).
+
+**Caught and fixed a real duplication problem before committing, not
+after:** first draft included a "## Performance numbers" section with
+hand-typed approximate figures (graph build ~2.5s, cluster features ~13s,
+scoring p50 ~32ms) pulled from earlier terminal output. Two problems:
+(1) `run_pipeline.write_benchmark` already generates a "## Performance"
+section with exact, fresh numbers on every `make results` run and
+appends it to this exact file -- my hand-typed version was duplicating
+that, with rounder, staler numbers standing next to the real ones after
+the next pipeline run. (2) Worse: I'd named my section exactly
+"## Performance" (matching write_benchmark's `_remove_section` target),
+which meant the next `make results` run would have silently deleted my
+own paragraph along with the numbers it was replacing, not just left a
+harmless duplicate. Verified this precisely rather than guessing, by
+calling `_remove_section` directly against the file's actual content and
+confirming it returned the text unchanged after the fix. Fixed by
+removing every hand-copied benchmark figure and renaming the section
+"## Performance notes" -- a short frame for what's below, not a second
+source of truth for numbers that are supposed to come from a live
+benchmark. Applied the same fix to a smaller duplicate in the batch/inline
+table's summary line.
+
+The max_degree sweep figures (126 uids at 20, the phase transition at
+30->35, 64% at 1000) are quoted directly from graph.py's own module
+docstring, not re-derived -- that file is frozen and the sweep was a
+one-time empirical finding baked into it, which is a meaningfully
+different kind of number from a live benchmark timing: it won't drift
+between pipeline runs the way wall-clock latency will, so quoting it here
+isn't the same category of risk the Performance-section fix was about.
