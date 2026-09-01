@@ -627,3 +627,56 @@ same script is what would need to be re-run for the number that actually
 matters.
 
 No corrections needed this task -- ran cleanly on the first attempt.
+
+## 2026-08-31 — Task 3: policy.py + audit trail
+
+Deterministic decide/apply_policy over allow/step_up/review. Thresholds
+are NOT hand-picked: scripts/derive_policy_thresholds.py sweeps the
+cluster model's real test-set scores twice, both at cost_fn=500, different
+cost_fp: cost_fp=5 for step_up (25,923.31 min cost at t=0.010302 -- this
+exactly matches Task 4's existing cost_curve.py output for the cluster
+model, a good cross-check that both sweeps agree) and cost_fp=50 for
+review (75,625.70 min cost at t=0.184343). The 10x cost_fp multiplier for
+review vs step_up is stated as illustrative in policy.py's own docstring,
+same caveat as every other cost assumption this project has made. Hard-coded
+the two results as STEP_UP_THRESHOLD/REVIEW_THRESHOLD constants with the
+script named as provenance, rather than recomputing them at import time.
+
+decide() takes cluster_features but doesn't use it in the threshold
+comparison (the policy is deliberately score-only, not cluster-conditioned)
+-- documented explicitly in the docstring so this isn't mistaken for a bug,
+and the parameter is kept because callers building an audit record want it
+alongside the decision. apply_policy is a vectorized batch path proven
+equivalent to calling decide() row-by-row (tests/test_policy.py), needed
+for performance across the full entity population.
+
+MODEL_VERSION is derived from model.py's own SEED/NUM_BOOST_ROUND constants
+(`cluster_seed42_boost300`) rather than a hand-typed string, so it can't
+silently drift from what actually trained.
+
+build_audit_record assembles the required fields (transaction_id, uid,
+model_version, score, threshold_applied, feature_values, action, reason,
+timestamp) as a pure function; scripts/write_audit_sample.py does the
+actual scoring/decisioning/writing, producing 200 real records in
+results/audit_sample.jsonl from real test-period transactions (131 allow,
+63 step_up, 6 review). Left several feature_values fields null in the
+sample on purpose rather than filtering them out: some sampled
+transactions have a uid with no pre-as_of cluster history (null cluster
+features, exactly the "new-in-test-period" case established in Task 2 of
+the previous session) and one sampled transaction has no uid at all --
+that one still got a real decision (score 0.4364 -> review), which is
+correct: the ~11% no-uid population is the highest-risk slice
+(uid_validation.md) and must still be scored and decided on, never
+silently skipped.
+
+policy.py has no import of investigator.py -- checked two ways in
+tests/test_policy.py: statically (parse policy.py's AST, assert no import
+mentions "investigator") and behaviorally (apply_policy on identical
+scores with ANTHROPIC_API_KEY set vs. unset AND
+sys.modules["src.investigator"] simulated unavailable -- identical
+DataFrames both times). 8 new tests total, all passing; 47 in the full
+suite.
+
+No corrections needed this task -- the two threshold sweeps and the audit
+script all ran cleanly on the first attempt, likely because the sweep
+methodology was already proven out in Task 4 of the previous session.
