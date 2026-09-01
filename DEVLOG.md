@@ -1430,3 +1430,57 @@ distinguish them. The honest conclusion of Tasks 1 and 2 together: this
 project's queue-ordering evaluation is fraud-count-limited, not
 idea-limited -- there are several plausible orderings, and not enough
 positives on this test split to say which, if any, is actually better.
+
+## 2026-09-01 -- Task 3: the headline lift swings a lot, and the residual lift isn't even reliably positive
+
+**What was built.** `scripts/eval_stability.py` -> results/stability.md.
+results/ablation.md's +0.0676 PR-AUC lift comes from exactly one temporal
+boundary (last 20% held out). This re-runs the entire ablation -- fresh
+entity graph, fresh causal cluster features, fresh baseline/cluster/
+trimmed models, nothing cached -- at 4 rolling split points (60/70/80/90%
+through sorted TransactionDT), importing only entities.py/graph.py/
+model.py/evaluate.py (all frozen, none modified) plus
+run_pipeline.broadcast_cluster_features (not frozen, reused as-is). Took
+408s for all 4 splits; the time-budget fallback (drop to 3 splits) wasn't
+needed.
+
+**Consistency check first, since it's the cheapest way to catch a bug:**
+the 80% split point in this script reproduced results/ablation.md's exact
+numbers -- baseline 0.5646, cluster 0.6322, lift +0.0676, trimmed
+0.5756 -- to 4 decimal places, both times this script was run. That's the
+same train/test boundary computed independently by a different script, so
+this is real evidence the split/feature/training logic here matches
+run_pipeline.py's, not just an assumption.
+
+**What the numbers say.** The full cluster-feature lift swings from
++0.0284 (60% split) to +0.0676 (80% split) -- mean +0.0516, spread 0.0393,
+which is most of the mean itself. results/ablation.md's headline number
+is one sample from a noisy distribution, not a fixed property of the
+feature set, and this report says so plainly rather than treating +0.0676
+as *the* number.
+
+**What surprised me, and it's the more important finding of the two:**
+the *residual* lift -- PR-AUC gain from the structural/graph features
+alone, with `cluster_prior_fraud_share` removed -- isn't just noisy, it
+changes sign: -0.0044 at 60%, +0.0186 at 70%, +0.0110 at 80%, -0.0013 at
+90% (mean +0.0060, spread 0.0230 -- larger than the mean in absolute
+terms). README.md currently calls this residual "a smaller but genuine
+residual lift on their own," a characterization that rests entirely on
+the single 80% split. Across 4 splits it is not reliably positive at all
+-- it looks like noise centered near zero, not a small-but-real
+structural signal. results/stability.md states this plainly and flags it
+against README's existing wording, but does not edit README's Result/
+Limitations prose itself -- that's an editorial call about the project's
+main narrative, out of scope for a script whose deliverable is the
+stability report, not a rewrite of the headline story.
+
+**Why this matters for the project as a whole.** Between this and Tasks
+1-2, the pattern across this whole session is the same: every number this
+project has treated as a stable property of the model turns out to be
+more fragile once measured more than once -- the cluster-queue priority
+score didn't beat a naive baseline (Task 1), no simple alternative
+ordering confidently beat it either (Task 2), and now the "genuine"
+non-prior-fraud lift doesn't reliably survive a different temporal
+boundary (Task 3). None of these are contradictions or bugs -- they're
+what you find when you go looking for a second measurement instead of
+resting on the first one.
