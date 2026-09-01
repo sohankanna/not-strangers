@@ -485,3 +485,36 @@ headline ablation numbers from Task 2 stand, but the honest reading is
 project's own documented noisy-label dynamic; the graph-structural
 features alone add a smaller, genuine ~0.011 PR-AUC." Both numbers are now
 in results/ablation.md; neither is hidden in favor of the other.
+
+## 2026-08-31 — Task 4: threshold sweep and cost curve
+
+scripts/cost_curve.py sweeps 300 thresholds (dense from 0-0.05, coarser
+0.05-1.0, since the base rate is ~3.5% and both models' scores concentrate
+near 0), plots both models' cost_per_10k curves, and marks each model's own
+cost-minimizing point. Appends recall/FPR at each chosen point to
+results/ablation.md.
+
+**Got wrong and corrected (presentation, not numbers):** first version put
+both "chosen point" annotations directly on a single full-range [0,1] plot.
+Both models' optimal thresholds landed within 0.001 of each other
+(0.0095 vs 0.0103) in the steep near-zero region, so the two text labels
+overlapped into unreadable text. Fixed by splitting into two panels: the
+full [0,1] range for shape, and a zoomed [0,0.05] panel (shaded on the
+full-range plot to show where it comes from) with the annotations properly
+offset apart. The underlying numbers were correct on the first run; only
+the plot was unreadable.
+
+**Chosen operating points:** baseline t=0.0095 (cost 30,009, recall 0.9326,
+FPR 0.3813); cluster t=0.0103 (cost 25,923, recall 0.9530, FPR 0.3695). The
+cluster model's cost-minimizing point is both cheaper AND has a lower FPR
+at a higher recall -- a real, not cherry-picked, improvement here.
+
+**Worth flagging plainly:** the cost-minimizing FPR is 37-38% for both
+models. That's a direct, correct consequence of the assumed 100:1
+cost_fn:cost_fp ratio (a missed fraud case is assumed 100x worse than one
+false alarm, so the cost-optimal policy flags aggressively) -- not a bug,
+but it means "cost-optimal" here means stepping up roughly a third of all
+legitimate transactions, which is a real business-acceptability question
+the illustrative cost ratio is doing all the work to answer. Said this
+directly in ablation.md rather than only reporting the flattering
+recall/cost numbers next to it.

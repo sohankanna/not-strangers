@@ -133,3 +133,16 @@ Structurally: `graph.build_entity_graph` is called in run_pipeline.load_and_prep
 - Every node in the graph corresponds to a uid with at least one train-period transaction: 0 nodes found in the graph with zero train-period transactions (should be 0).
 - Concrete example: uid `10004_225_152` appears ONLY in the test period (no train-period transactions). It is absent from the graph's node set, and its broadcast cluster features are all null (as expected -- no train-period history means no cluster signal, not a fabricated one).
 
+## Threshold sweep and cost curve
+
+results/cost_curve.png sweeps score thresholds directly (not relying on the calibration assumption behind ablation.md's headline threshold) and marks each model's own cost-minimizing point.
+
+![Cost per 10k vs threshold](cost_curve.png)
+
+| model | chosen threshold | cost per 10k at chosen point | recall | FPR |
+|---|---:|---:|---:|---:|
+| baseline | 0.0095 | 30008.97 | 0.9326 | 0.3813 |
+| cluster | 0.0103 | 25923.31 | 0.9530 | 0.3695 |
+
+Worth being explicit about: the cost-minimizing FPR here is 37%-38% -- a direct, correct mathematical consequence of the assumed 100:1 cost_fn:cost_fp ratio (missing fraud is assumed to be that much worse than a false alarm, so the optimum flags aggressively), not a bug. In practice this means stepping up upwards of a third of all legitimate transactions at the "optimal" point -- whether that's acceptable is a business call the assumed cost ratio drives entirely; a less aggressive cost ratio (or a friction budget constraint) would move the chosen threshold and the resulting FPR substantially.
+
