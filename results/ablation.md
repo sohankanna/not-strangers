@@ -17,7 +17,7 @@ Cluster model vs. baseline: PR-AUC +0.0676, recall@1%FPR +0.0785, cost per 10k -
 
 ## Detailed findings
 
-*(Moved here from README.md's Result section during a README restructure, verbatim except for cross-references that pointed back into README -- nothing below is a new claim.)*
+*(Moved here from README.md's Result section during a README restructure, verbatim except for cross-references that pointed back into README -- nothing below is a new claim. Restored here after a full `python -m src.run_pipeline` re-run regenerated this file from scratch and silently dropped this hand-added section, since run_pipeline.py's write_ablation_report doesn't know about it -- see DEVLOG.md.)*
 
 About 84% of the headline PR-AUC lift (+0.0676) comes from a single feature, `cluster_prior_fraud_share` -- without it, the lift is +0.0110 PR-AUC (0.5756 vs. 0.5646) on this split. That feature was traced end to end and confirmed not to leak test-period labels (checked against all 155,579 clusters, not spot-checked -- see this report's Sanity checks section above), but its predictive power leans heavily on this dataset's label-propagation dynamic (a chargeback on one transaction retroactively marks the rest of that card's history as fraud), not on an independently-discovered abuse signal. See README.md's Limitations section.
 

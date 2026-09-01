@@ -44,6 +44,21 @@ ever need edges established by train-period data, so a single train-only
 graph is exactly right for both, with no per-edge timestamp bookkeeping
 required. Passing a `graph` built from data at or after `as_of` would be a
 caller error this module does not try to detect.
+
+Topology features (k_core_number, star_ratio): additive-only. Existing
+callers of compute_cluster_features are completely unaffected -- these two
+are computed only when the caller explicitly passes include_topology=True,
+so every existing call site (run_pipeline.py included) keeps getting
+exactly the same 10 columns, computed exactly the same way, with the
+default False. They exist to test a specific hypothesis: whether cluster
+SHAPE (not just size/rate aggregates) predicts abuse -- a hub-and-spoke
+device farm and a tight mutual clique of the same size look identical to
+every existing feature here, but not to k-core depth or degree
+concentration. Both are pure graph-topology reads (like node_degree
+already is): computed from `graph` as given and `graph`'s degree/core
+structure, not re-filtered by as_of internally, for the same reason
+node_degree isn't -- causal correctness for graph topology is the
+caller's responsibility (build `graph` from pre-as_of data), stated above.
 """
 
 from __future__ import annotations
@@ -209,6 +224,7 @@ def compute_cluster_features(
     entity_ids: pd.Series,
     graph: nx.Graph,
     as_of: float | None = None,
+    include_topology: bool = False,
 ) -> pd.DataFrame:
     """Compute cluster-level features for each entity, causally.
 
@@ -229,6 +245,13 @@ def compute_cluster_features(
             earlier than this value contribute to any returned value. Set
             to the train/test split boundary when computing features for
             test-period transactions.
+        include_topology: If True, also compute k_core_number and
+            star_ratio (see Returns below). Defaults to False so every
+            existing caller -- including run_pipeline.py, unmodified --
+            keeps getting exactly the 10 columns it always has, computed
+            exactly the same way. Additive-only: new code opts in
+            explicitly rather than every caller getting new columns for
+            free.
 
     Returns:
         A DataFrame indexed by entity_id (uid) with columns:
@@ -254,6 +277,21 @@ def compute_cluster_features(
           - cluster_prior_fraud_share: share of the cluster's member uids
             with at least one isFraud=1 transaction, itself subject to the
             same as_of cutoff as everything else here.
+          - k_core_number (only when include_topology=True): this uid's
+            k-core index in `graph` (networkx's core_number) -- how deep the
+            densest subgraph containing this node goes. A node in a 4-core
+            has at least 4 neighbors that are themselves at least
+            that embedded; a leaf's core number is at most 1. Like
+            node_degree, this reads `graph` as given (already pre-as_of by
+            construction) and defaults to 0 for a uid absent from the graph.
+          - star_ratio (only when include_topology=True): the highest
+            `node_degree` among the cluster's currently-active members,
+            divided by cluster_size_uids. Close to 1 for a hub-and-spoke
+            shape (one high-degree hub, everyone else degree ~1); a
+            same-size mutual clique also trends toward 1 by this formula
+            alone, so pair it with cluster_edge_density to tell the two
+            apart (a clique has both a high star_ratio AND a high edge
+            density; a star has a high star_ratio but a LOW edge density).
 
         Only uids with at least one qualifying (pre-as_of) transaction get a
         row -- a uid with no history yet as of the cutoff gets no row here,
@@ -264,20 +302,21 @@ def compute_cluster_features(
     if as_of is not None:
         txns = txns.loc[txns["TransactionDT"] < as_of]
 
-    empty_result = pd.DataFrame(
-        columns=[
-            "cluster_size_uids",
-            "cluster_txn_count",
-            "cluster_edge_density",
-            "node_degree",
-            "cluster_velocity",
-            "cluster_amt_cv",
-            "cluster_burst_concentration",
-            "uid_email_domain_count",
-            "cluster_email_uid_ratio",
-            "cluster_prior_fraud_share",
-        ]
-    )
+    result_columns = [
+        "cluster_size_uids",
+        "cluster_txn_count",
+        "cluster_edge_density",
+        "node_degree",
+        "cluster_velocity",
+        "cluster_amt_cv",
+        "cluster_burst_concentration",
+        "uid_email_domain_count",
+        "cluster_email_uid_ratio",
+        "cluster_prior_fraud_share",
+    ]
+    if include_topology:
+        result_columns = result_columns + ["k_core_number", "star_ratio"]
+    empty_result = pd.DataFrame(columns=result_columns)
     empty_result.index.name = "entity_id"
     if txns.empty:
         return empty_result
@@ -345,6 +384,17 @@ def compute_cluster_features(
         / possible_edges.replace(0, np.nan)
     )
 
+    # --- topology features (only when requested -- see include_topology) ---
+    per_cluster_extra: dict[str, pd.Series] = {}
+    if include_topology:
+        # star_ratio's numerator: each active member's own (whole-graph)
+        # node_degree, maxed within its cluster -- the same node_degree_full
+        # dict node_degree itself uses, same default-to-0 convention for a
+        # uid absent from the graph.
+        active_node_degree = txns["uid"].map(lambda u: node_degree_full.get(u, 0))
+        max_node_degree_by_cluster = active_node_degree.groupby(txns["cluster_id"]).max()
+        per_cluster_extra["star_ratio"] = max_node_degree_by_cluster / cluster_uid_count
+
     # --- assemble per-cluster table, then broadcast onto each uid ---
     per_cluster = pd.DataFrame(
         {
@@ -356,6 +406,7 @@ def compute_cluster_features(
             "cluster_burst_concentration": cluster_burst_concentration,
             "cluster_email_uid_ratio": cluster_email_uid_ratio,
             "cluster_prior_fraud_share": cluster_prior_fraud_share,
+            **per_cluster_extra,
         }
     )
 
@@ -364,5 +415,9 @@ def compute_cluster_features(
     result["node_degree"] = result.index.map(lambda u: node_degree_full.get(u, 0))
     result["uid_email_domain_count"] = uid_email_domain_count
     result.index.name = "entity_id"
+
+    if include_topology:
+        core_number_full = nx.core_number(graph)
+        result["k_core_number"] = result.index.map(lambda u: core_number_full.get(u, 0))
 
     return result[list(empty_result.columns)]

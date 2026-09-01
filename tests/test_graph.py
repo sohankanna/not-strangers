@@ -4,6 +4,8 @@ features -- including the explicit leakage test the task called for.
 
 from __future__ import annotations
 
+import itertools
+
 import networkx as nx
 import pandas as pd
 import pytest
@@ -211,6 +213,150 @@ def test_compute_cluster_features_no_rows_returns_empty_frame():
     result = compute_cluster_features(df, entity_ids, graph, as_of=0)  # nothing qualifies
 
     assert result.empty
+
+
+# --- topology features: k_core_number, star_ratio (include_topology=True) ---
+
+
+def _topology_frame():
+    """Three clusters chosen to need BOTH new features to tell apart:
+    a star (hub uidH + 3 leaves, a tree -- no cycle) and a same-size clique
+    (uidP/Q/R/S, K4) end up with the identical star_ratio (max degree /
+    cluster size), by construction -- that's the whole reason star_ratio
+    alone doesn't distinguish shape and has to be read alongside
+    cluster_edge_density (already existing) and k_core_number (new): a tree
+    can never have a k-core above 1 (no cycles to sustain one), while K4's
+    every node is in its own 3-core. uidZ is an isolated singleton, the
+    existing degenerate case every other feature already handles.
+    """
+    uids = ["uidH", "uidL1", "uidL2", "uidL3", "uidP", "uidQ", "uidR", "uidS", "uidZ"]
+    df = pd.DataFrame(
+        {
+            "TransactionID": [10, 11, 12, 13, 20, 21, 22, 23, 30],
+            "TransactionDT": [100, 101, 102, 103, 200, 201, 202, 203, 300],
+            "TransactionAmt": [100.0] * 9,
+            "P_emaildomain": ["x.com"] * 9,
+            "isFraud": [0] * 9,
+        }
+    )
+    entity_ids = _entity_ids([10, 11, 12, 13, 20, 21, 22, 23, 30], uids)
+
+    graph = nx.Graph()
+    graph.add_nodes_from(uids)
+    for leaf in ("uidL1", "uidL2", "uidL3"):
+        graph.add_edge("uidH", leaf)
+    for u1, u2 in itertools.combinations(("uidP", "uidQ", "uidR", "uidS"), 2):
+        graph.add_edge(u1, u2)
+    return df, entity_ids, graph
+
+
+def test_topology_features_absent_unless_requested():
+    """include_topology defaults to False -- every existing caller
+    (run_pipeline.py included, unmodified) keeps getting exactly the
+    original 10 columns, computed exactly as before.
+    """
+    df, entity_ids, graph = _topology_frame()
+
+    result = compute_cluster_features(df, entity_ids, graph)
+
+    assert "k_core_number" not in result.columns
+    assert "star_ratio" not in result.columns
+    assert list(result.columns) == [
+        "cluster_size_uids",
+        "cluster_txn_count",
+        "cluster_edge_density",
+        "node_degree",
+        "cluster_velocity",
+        "cluster_amt_cv",
+        "cluster_burst_concentration",
+        "uid_email_domain_count",
+        "cluster_email_uid_ratio",
+        "cluster_prior_fraud_share",
+    ]
+
+
+def test_topology_features_star_vs_clique_vs_singleton():
+    df, entity_ids, graph = _topology_frame()
+
+    result = compute_cluster_features(df, entity_ids, graph, include_topology=True)
+
+    hub = result.loc["uidH"]
+    leaf = result.loc["uidL1"]
+    clique_member = result.loc["uidP"]
+    lone = result.loc["uidZ"]
+
+    # Star (hub degree 3, cluster size 4): star_ratio = 3/4. A tree has no
+    # cycle, so k-core tops out at 1 for every connected node in it.
+    assert hub["star_ratio"] == pytest.approx(0.75)
+    assert leaf["star_ratio"] == pytest.approx(0.75)  # per-cluster, not per-uid
+    assert hub["k_core_number"] == 1
+    assert leaf["k_core_number"] == 1
+    assert hub["cluster_edge_density"] == pytest.approx(3 / 6)  # 3 edges / C(4,2)
+
+    # Clique (K4): every node degree 3, same cluster size 4 -> the SAME
+    # star_ratio as the star above -- demonstrating why star_ratio alone
+    # can't tell the two shapes apart. edge_density and k_core_number do:
+    # K4's minimum degree is 3, so its whole 4-node graph is a 3-core.
+    assert clique_member["star_ratio"] == pytest.approx(0.75)
+    assert clique_member["cluster_edge_density"] == pytest.approx(1.0)  # 6/6
+    assert clique_member["k_core_number"] == 3
+
+    # Singleton: no edges at all.
+    assert lone["star_ratio"] == pytest.approx(0.0)
+    assert lone["k_core_number"] == 0
+    assert pd.isna(lone["cluster_edge_density"])
+
+
+def test_topology_features_ignore_transactions_at_or_after_as_of():
+    """Explicit leakage coverage for both new features, extending the same
+    test the task called for.
+
+    k_core_number never touches `txns` at all -- it's a pure read of
+    `graph`, exactly like node_degree -- so it can't leak by construction,
+    asserted here rather than left implicit.
+
+    star_ratio's active-membership logic is the one genuinely at risk:
+    this adds a 5th star member (uidL4, graph-linked to the hub) whose
+    ONLY transaction is dated at/after as_of. If the as_of filter were
+    bypassed anywhere in star_ratio's computation, uidL4 would wrongly
+    count toward cluster_uid_count and change the ratio; it must not.
+    """
+    df, entity_ids, graph = _topology_frame()
+    as_of = 150  # after the star cluster's rows (DT 100-103), before the clique's
+
+    graph.add_edge("uidH", "uidL4")  # graph-linked, but no transaction yet
+
+    future_row = pd.DataFrame(
+        {
+            "TransactionID": [14],
+            "TransactionDT": [5000],  # after as_of
+            "TransactionAmt": [999999.0],
+            "P_emaildomain": ["future-only-domain.com"],
+            "isFraud": [1],
+        }
+    )
+    future_entity = _entity_ids([14], ["uidL4"])
+
+    df_with_future = pd.concat([df, future_row], ignore_index=True)
+    entity_ids_with_future = pd.concat([entity_ids, future_entity])
+
+    with_future = compute_cluster_features(
+        df_with_future, entity_ids_with_future, graph, as_of=as_of, include_topology=True
+    )
+    without_future = compute_cluster_features(
+        df, entity_ids, graph, as_of=as_of, include_topology=True
+    )
+
+    star_uids = ["uidH", "uidL1", "uidL2", "uidL3"]
+    pd.testing.assert_frame_equal(
+        with_future.loc[star_uids].sort_index(),
+        without_future.loc[star_uids].sort_index(),
+    )
+
+    # uidL4's only transaction is post-as_of -- it must not get a row at all,
+    # in either run, regardless of its (real, permanent) graph edge to the hub.
+    assert "uidL4" not in with_future.index
+    assert "uidL4" not in without_future.index
 
 
 # --- the explicit leakage test -----------------------------------------------
