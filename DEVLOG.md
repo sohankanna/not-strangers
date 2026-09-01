@@ -1724,3 +1724,48 @@ which is the test that actually matters for whether this is real or
 single-split noise (the same lesson Task 3 of the earlier stability
 session taught about the aggregate-only lift itself). Not drawing the
 final conclusion here -- that's what the stability re-run is for.
+
+## 2026-09-01 -- Task 3: topology still flips sign -- this is the session's answer
+
+**What was built.** `scripts/eval_stability_topology.py` ->
+results/stability_topology.md. Same 4 rolling splits as
+results/stability.md (60/70/80/90%, fresh graph/features/models at each,
+nothing cached), extended to also train a topology-augmented trimmed
+model (original + `k_core_number` + `star_ratio`, minus
+`cluster_prior_fraud_share`) at every split. Took 890s for all 4 splits
+-- roughly 2.2x results/stability.md's own 408s, expected since this
+trains 4 models per split instead of 3.
+
+**Consistency check first:** the "without topology" column reproduces
+results/stability.md's exact numbers at all 4 splits -- -0.0044 (60%),
++0.0186 (70%), +0.0110 (80%), -0.0013 (90%), byte-for-byte. Same script
+family, same methodology, independently re-derived and matching --
+real evidence this run is measuring the same thing, not just an
+assumption.
+
+**The answer, plainly: topology does not rescue the residual lift.**
+With topology added, the lift is -0.0020 (60%), +0.0135 (70%), +0.0065
+(80%), -0.0104 (90%) -- mean +0.0019, spread 0.0239. It still changes
+sign at the exact same two splits (negative at 60% and 90%, positive at
+70% and 80%) as the aggregate-only version (mean +0.0060, spread 0.0230).
+Not a close call resolved narrowly either way -- the sign pattern is
+identical, and the mean is if anything smaller with topology than
+without it.
+
+**Did this change my belief about the project's core claim?** Yes,
+concretely. Before this session I'd have described the residual lift as
+"probably real but underpowered to prove" -- a hedge that assumed a
+richer feature set might tip it into being reliably positive. It didn't.
+Combined with Task 2's single-split finding (topology made things
+slightly worse, not better) and the two topology features' low feature
+importance (star_ratio 113th of 443, k_core_number 228th), I now read
+this as a real, structural finding rather than a measurement gap: on
+this dataset, at this sample size, cluster topology beyond
+`cluster_prior_fraud_share` does not carry a detectable abuse signal that
+two different feature-engineering attempts (aggregates, then shape) could
+surface. `cluster_prior_fraud_share` -- backward-looking, partly
+circular fraud history -- is carrying essentially the entire reliably-
+measured lift in this project, and that was true before this session and
+remains true after two honest attempts to find something else. No
+feature definition, threshold, or max_degree was tuned to reach this
+conclusion; it's what both attempts actually found.
