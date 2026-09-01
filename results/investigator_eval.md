@@ -42,3 +42,9 @@ No ungrounded claims found among the LLM explanations.
 - Evidence: `{'cluster_size_uids': 3, 'cluster_txn_count': 7, 'cluster_edge_density': 1.0, 'cluster_velocity': 7.0, 'cluster_amt_cv': 0.5211, 'cluster_burst_concentration': 0.1429, 'cluster_email_uid_ratio': 0.6667, 'cluster_prior_fraud_share': 1.0, 'total_transaction_amount': 1512.9399, 'mean_transaction_amount': 216.1343, 'distinct_product_codes': 2, 'distinct_email_domains': 2}`
 
 > All three identities in this cluster have prior fraud flags, giving a cluster_prior_fraud_share of 1.0 — every uid here has a known fraud history, which is the single most damning signal in the evidence. The cluster is fully interconnected (edge_density of 1.0), meaning each identity shares a linking attribute with every other, consistent with a coordinated synthetic or mule network rather than coincidental overlap. Activity is concentrated across only 2 distinct product codes and 2 distinct email domains, suggesting a narrow, scripted attack pattern rather than organic consumer behavior. The cluster_email_uid_ratio of 0.6667 indicates that email addresses are being reused across identities, a common technique in account-farming abuse. Taken together, the universal fraud history, full interconnection, and constrained behavioral footprint strongly point to deliberate coordinated fraud rather than an ambiguous or benign grouping.
+
+## Limitation, stated for README.md
+
+*(Moved here from README.md's Limitations section during a README restructure -- nothing below is a new claim.)*
+
+**The groundedness result is one run of 30 clusters.** The investigator layer's hard-number-grounding rule measured 100% (0 of 182 extracted claims ungrounded) against real `claude-sonnet-4-6` output, as measured above -- but that's one clean run, not a permanent guarantee. The check should keep running on every future re-run, not be treated as settled.

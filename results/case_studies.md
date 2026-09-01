@@ -117,3 +117,9 @@ clusters in the train graph -- it is evidence that the linkage rules *can*
 produce specific, defensible connections, not a claim about their overall
 precision across the whole population. That claim would need actual ring
 labels, which don't exist for this dataset.
+
+## Limitation, stated for README.md
+
+*(Moved here from README.md's Limitations section during a README restructure -- nothing below is a new claim.)*
+
+**Clusters have no ground truth.** There is no "this is a real coordinated ring" label anywhere in this dataset. Everything reported in this project is *feature lift* -- whether cluster-derived features improve a fraud classifier's ranking and cost metrics on a temporal holdout (see results/ablation.md) -- not *ring-detection accuracy*. This report inspects the 3 highest-priority clusters qualitatively and includes one flagged explicitly as ambiguous/possibly a false positive on the linkage (Case 3 above), rather than swapped for a cleaner-looking example.

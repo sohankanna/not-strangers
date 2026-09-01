@@ -55,3 +55,9 @@ Computed on the real IEEE-CIS `train_transaction.csv` (590,540 rows) by `scripts
 ## Histogram
 
 ![Transactions per uid distribution](uid_size_distribution.png)
+
+## Limitation, stated for README.md
+
+*(Moved here from README.md's Limitations section during a README restructure -- nothing below is a new claim.)*
+
+**~11% of rows get no uid at all**, mostly from a missing `addr1` (66,794 of 590,540 rows). Not dropped -- they get null cluster features and stay in training/evaluation -- because they're the *highest-risk* population: 11.63% fraud rate among NaN-uid rows vs. 2.46% among uid'd rows (see section 5 above). A system that silently excludes unresolvable rows would be excluding disproportionately dangerous traffic, not a random slice.

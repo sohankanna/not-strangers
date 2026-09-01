@@ -85,3 +85,9 @@ Distinct-value counts of card2, card3, card5 and P_emaildomain (nulls excluded f
 card2 / card3 / card5 show exactly one distinct (non-null) value across all 20 of these uids -- unsurprising, since card2/card3/card5 are sub-attributes of the same physical card as card1 (e.g. issuing bank/country codes), not independent identifiers, so fixing card1 largely fixes them too. They add little discriminating power for this check.
 
 **10 of the 20 largest uids show more than one distinct value on P_emaildomain.** That means card1+addr1+origin_day is not unique to a single cardholder for these uids -- the uid is merging multiple distinct clients who happen to share a card1, an address, and a first-seen day. Label purity being high (section 3, and the 98.53%/97.61% figures in uid_validation.md) shows these merges are usually *label-consistent* (the merged clients mostly share the same isFraud outcome), which is a much weaker claim than the uid being *correct* -- i.e. actually identifying one physical client. This is stability without correctness: safe enough to use as a clustering key for label-consistent aggregation, but it should not be presented as "the client" in an investigator-facing explanation without that caveat.
+
+## Limitation, stated for README.md
+
+*(Moved here from README.md's Limitations section during a README restructure -- nothing below is a new claim.)*
+
+**The uid over-merges.** `card1_addr1_origin_day` is a stable, highly label-pure identifier (98.53% of multi-transaction uids are label-pure, weighted 97.61% -- see results/uid_validation.md), but stability is not the same as correctness. The collision check above found `P_emaildomain` varying within 10 of the 20 largest uids -- distinct people are demonstrably sharing a uid. Treated in this project as signal (coordinated abuse), not an error to fix, but "cluster" here is not a verified single-person identity.

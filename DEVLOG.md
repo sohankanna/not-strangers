@@ -1590,3 +1590,51 @@ headless Chromium against a temporary `streamlit run app.py`) to
 regenerate all 3 docs/ PNGs. Verified the queue screenshot directly --
 header now reads "not-strangers", subtitle unchanged, rest of the queue
 UI identical. No pipeline files touched; 54/54 tests still pass.
+
+## 2026-09-01 -- README restructure: same content, four minutes not fifteen
+
+**What changed.** README.md was accurate but front-loaded with density --
+the Result section alone ran to 4 paragraphs before a reader ever saw the
+tool. Restructured to the requested shape: Result now ends after the
+table plus exactly 4 sentences (headline lift, the 84%/cluster_prior_
+fraud_share fact, the cross-split holds/doesn't-hold correction, one link
+line); Screenshots moved up to right after Result, before any caveats;
+Queue-level evaluation cut to 3 sentences; Reproduce/Setup compressed to
+commands with one line of context each; Architecture's prose cut to 3
+sentences on the ML/LLM/policy separation; all 7 Limitations bullets
+became a bold one-line claim plus at most 2 sentences; Mapping to
+production cut to 1 paragraph. New Troubleshooting section at the bottom
+holds the identity-linked-key setup detail that used to live in Setup.
+967 words end to end now (was denser and harder to scan, not shorter in
+a way that lost anything -- see below).
+
+**Nothing was deleted, only relocated -- verified, not assumed.** Every
+paragraph cut from README landed in a results/ file: the two long
+Result-section paragraphs (the 84% trace, the single-split-vs-cross-
+split correction) and the "dominant feature is backward-looking, partly
+circular" limitations bullet moved verbatim into a new "## Detailed
+findings" section in results/ablation.md; the uid-over-merges bullet
+into results/d1_investigation.md; the ~11%-no-uid bullet into
+results/uid_validation.md; the clusters-have-no-ground-truth bullet into
+results/case_studies.md; the groundedness-is-one-run bullet into
+results/investigator_eval.md. The max_degree and calibration bullets
+weren't duplicated anywhere -- checked sentence-by-sentence first, and
+ARCHITECTURE.md and results/ablation.md's own Graph construction/
+Calibration sections already state a superset of what README said, so
+those two just got a link instead of a second copy. Diffed every numeric
+token between the old and new README (`comm` on sorted number lists) to
+confirm nothing changed value -- the only real deltas were numbers now
+appearing once in compressed prose instead of twice (once in prose, once
+in the still-present table), which is compression, not loss.
+
+**What surprised me:** how much of the "full detail" this task asked to
+relocate turned out to already exist in the target file, just phrased
+differently -- ARCHITECTURE.md's max_degree sweep and ablation.md's
+Calibration section were already supersets of README's own summaries.
+The restructure mostly needed subtraction from README, not new writing
+elsewhere.
+
+No frozen pipeline files or app.py touched; 54/54 tests still pass. Not
+committed -- this task didn't ask for one, and after the branch mixup
+earlier this session, committing is now something I wait to be asked for
+rather than assume.
