@@ -1,7 +1,9 @@
 # abuse-ring-sentinel
 
-Detects coordinated payment abuse by resolving transactions into entities
-and scoring the clusters they form, rather than scoring transactions in isolation.
+Detects coordinated payment abuse by resolving IEEE-CIS transactions into
+persistent client identities and scoring the *clusters* those identities
+form (shared device, address+email, or card/bank/address), instead of
+scoring each transaction in isolation.
 
 ## Result
 
@@ -9,83 +11,176 @@ and scoring the clusters they form, rather than scoring transactions in isolatio
 |---|---|---|---|
 | Baseline (txn features only) | 0.5646 | 0.4791 | 30,078.40 |
 | + cluster features | 0.6322 | 0.5576 | 26,155.72 |
-| + cluster features, minus cluster_prior_fraud_share | 0.5756 | 0.4951 | 29,317.66 |
+| + cluster features, minus `cluster_prior_fraud_share` | 0.5756 | 0.4951 | 29,317.66 |
 
-Temporal holdout (472,432 train / 118,108 test rows). Reproduce:
-`make results`. Costs (cost_fn=500, cost_fp=5) are illustrative, not
-Razorpay figures. Full breakdown, hyperparameters, feature importances,
-adversarial sanity checks and the threshold/cost curve are in
-[results/ablation.md](results/ablation.md).
+Temporal holdout (472,432 train / 118,108 test rows, split on
+`TransactionDT`, never random). Full breakdown, hyperparameters, feature
+importances, adversarial sanity checks, the threshold/cost curve and
+calibration are in [results/ablation.md](results/ablation.md).
 
-The third row matters: about 84% of the headline PR-AUC lift comes from
-one feature (cluster_prior_fraud_share). It was traced end to end and
-found not to leak test-period labels (verified across all 155,579 clusters,
-not just spot-checked -- see results/ablation.md's Sanity checks section),
-but its predictive power leans heavily on the label-propagation dynamic
-described below, not on an independent abuse signal. The remaining
-structural/graph features (edge density, velocity, burst concentration,
-email heterogeneity, cluster size) contribute a smaller but genuine
-residual lift on their own.
+**Read the third row before the first one.** About 84% of the headline
+PR-AUC lift (+0.0676) comes from a single feature,
+`cluster_prior_fraud_share` -- without it, the lift is +0.0110 PR-AUC
+(0.5756 vs. 0.5646). That feature was traced end to end and confirmed not
+to leak test-period labels (checked against all 155,579 clusters, not
+spot-checked -- see results/ablation.md's Sanity checks section), but its
+predictive power leans heavily on this dataset's label-propagation
+dynamic (a chargeback on one transaction retroactively marks the rest of
+that card's history as fraud), not on an independently-discovered abuse
+signal. The remaining structural/graph features -- edge density, velocity,
+burst concentration, email heterogeneity, cluster size -- contribute a
+smaller but genuine residual lift on their own. See Limitations below.
 
-## Why clusters
-## Data & labels
+## Reproduce
+
+```
+python -m src.run_pipeline
+```
+
+or, if you have GNU Make available (it is **not** present by default on
+Windows -- this was checked, not assumed; see DEVLOG.md):
+
+```
+make results
+```
+
+Both run the identical pipeline and produce every artifact in `results/`
+end to end: the ablation table, sanity checks, cost curve, calibration
+plot, investigator evaluation, audit trail sample, and the performance
+benchmark appended to ARCHITECTURE.md. `results/case_studies.md` is the
+one exception -- it's a hand-curated qualitative write-up, not
+regenerated automatically (see `scripts/case_studies.py`'s docstring).
+
+Run the dashboard with:
+
+```
+streamlit run app.py
+```
+
+## Setup
+
+1. **Python environment**
+   ```
+   python -m venv .venv
+   .venv/Scripts/activate   # or .venv/bin/activate on macOS/Linux
+   pip install -r requirements.txt
+   ```
+2. **Data.** Run `bash scripts/download_data.sh` (needs a Kaggle account,
+   the `kaggle` CLI, and having accepted the IEEE-CIS Fraud Detection
+   competition rules). This project never commits anything under `data/`.
+3. **LLM layer (optional).** `investigator.py` degrades gracefully with no
+   key at all -- `make results` and the dashboard both work either way,
+   falling back to a deterministic template narrative.
+   - `ANTHROPIC_API_KEY` -- enables real explanations from
+     `claude-sonnet-4-6`.
+   - `ANTHROPIC_WORKSPACE_ID` -- **required in addition to the key if
+     your key is identity-linked** (a workspace-scoped key). Identity-linked
+     keys are rejected by the API on every call without an
+     `anthropic-workspace-id` header, and (before this was fixed) that
+     failure was silent -- see DEVLOG.md's entry on this for the full
+     story, and `results/investigator_eval.md`'s "Fallback errors
+     encountered" section to check whether calls are actually succeeding
+     in your environment.
+
 ## Architecture
 
-## Running it
+```
+entities.py  --  resolve_entities()  ->  uid (persistent client identity)
+      |
+graph.py     --  build_entity_graph() + compute_cluster_features(), causally
+      |
+model.py     --  baseline vs. cluster-augmented LightGBM, identical hyperparameters
+      |
+evaluate.py  --  PR-AUC / recall@1%FPR / cost-per-10k (frozen; never edited to improve numbers)
+      |
+policy.py    --  allow / step_up / review, from fixed cost-derived thresholds
+      |
+investigator.py  --  LLM narrative + priority score for the review queue
+```
 
-### Environment variables (investigator.py / the LLM layer)
+**The ML/LLM/policy separation is structural, not a convention.**
+`policy.py` has no import of `investigator.py` -- checked both statically
+(its AST contains no such import) and behaviorally (decisions are
+identical whether or not an API key is available). `policy.decide()`'s
+action comes only from a model score against two fixed thresholds
+(`STEP_UP_THRESHOLD=0.0103`, `REVIEW_THRESHOLD=0.1843`, read from real
+cost-curve sweeps, not hand-picked); `investigator.py` only ever produces
+a narrative and a queue-ranking score, never an action. The dashboard
+carries this separation into the UI: every decision is labeled as coming
+from policy.py with the threshold that produced it, and every narrative
+is labeled with its real source (the LLM, or the deterministic fallback).
+Full detail, including the linkage rules and the batch/inline split, is in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
-- `ANTHROPIC_API_KEY` -- required to get real explanations from
-  claude-sonnet-4-6 (see `src/investigator.py`). If unset, or if any API
-  call fails for any reason, the pipeline falls back to a deterministic
-  template narrative and keeps running -- `make results` always completes,
-  key or no key.
-- `ANTHROPIC_WORKSPACE_ID` -- **required in addition to the key if your key
-  is identity-linked (a workspace-scoped key rather than a plain API
-  key).** Identity-linked keys are rejected by the API unless every
-  request carries an `anthropic-workspace-id` header; without it, every
-  single call fails even though the key itself is valid, and (before this
-  was fixed) failed silently into the fallback path with no visible error.
-  Leave this unset if your key is not identity-linked -- it's only added
-  as a request header when present, so a plain key keeps working exactly
-  as before. See results/investigator_eval.md's "Fallback errors
-  encountered" section to check whether calls are actually succeeding.
+## Screenshots
+
+| Review queue | Cluster detail |
+|---|---|
+| ![Review queue](docs/screenshot_queue.png) | ![Cluster detail](docs/screenshot_detail.png) |
+
+| Model performance |
+|---|
+| ![Model performance](docs/screenshot_performance.png) |
 
 ## Limitations
 
-- **Label noise.** Labels are chargeback-reported and, per how this
-  dataset is constructed, propagate across a card once one transaction on
-  it is reported -- a single confirmed chargeback can retroactively paint
-  every other transaction on that card as fraud, whether or not each one
-  actually was. `cluster_prior_fraud_share`, the single largest driver of
-  the measured lift, is close to a direct measurement of this same
+- **Label noise, and its interaction with the dominant feature.** Labels
+  are chargeback-reported and, per how this dataset is constructed,
+  propagate across a card once one transaction on it is reported -- a
+  single confirmed chargeback can retroactively paint every other
+  transaction on that card as fraud, whether or not each one actually was.
+  `cluster_prior_fraud_share`, the single largest driver of the measured
+  lift (see Result above), is close to a direct measurement of this same
   propagation dynamic ("has this persistent card-identity already been
   caught"). That makes it a legitimate, non-leaking feature, not an
-  independently-discovered abuse signal -- the model is partly learning to
-  reproduce the label-generation process itself.
+  independently-discovered abuse signal -- the model is partly learning
+  to reproduce the label-generation process itself.
 - **The uid over-merges.** `card1_addr1_origin_day` is a stable, highly
   label-pure identifier (98.53% of multi-transaction uids are label-pure,
   weighted 97.61% -- see results/uid_validation.md), but stability is not
   the same as correctness. The collision check in
-  results/d1_investigation.md found P_emaildomain varying within 10 of the
-  20 largest uids -- distinct people are demonstrably sharing a uid. A uid
-  containing several distinct people who share a card fingerprint is
-  treated in this project as signal (coordinated abuse), not an error to
-  fix, but it means "cluster" here is not a verified single-person
-  identity.
-- **~11% of rows get no uid at all**, mostly from a missing addr1
-  (66,794 of 590,540 rows). These are not dropped -- they get null cluster
-  features and stay in training/evaluation -- because they are the
-  *highest-risk* population: 11.63% fraud rate among NaN-uid rows vs. 2.46%
-  among uid'd rows (results/uid_validation.md). Any cluster-based system
-  that silently excludes unresolvable rows would be excluding
-  disproportionately dangerous traffic, not a random slice.
+  results/d1_investigation.md found `P_emaildomain` varying within 10 of
+  the 20 largest uids -- distinct people are demonstrably sharing a uid.
+  Treated in this project as signal (coordinated abuse), not an error to
+  fix, but "cluster" here is not a verified single-person identity.
+- **~11% of rows get no uid at all**, mostly from a missing `addr1`
+  (66,794 of 590,540 rows). Not dropped -- they get null cluster features
+  and stay in training/evaluation -- because they're the *highest-risk*
+  population: 11.63% fraud rate among NaN-uid rows vs. 2.46% among uid'd
+  rows (results/uid_validation.md). A system that silently excludes
+  unresolvable rows would be excluding disproportionately dangerous
+  traffic, not a random slice.
+- **`max_degree=20`, and what it excludes.** The graph's hub guard treats
+  a value shared by more than `max_degree` uids as a common default, not
+  evidence of a relationship. The literal function default (1000) collapses
+  64% of all uids into one connected component on this data (addr1 is a
+  low-cardinality region code, and card3/card5 are almost constant); 20
+  keeps the largest cluster at 0.06% of all uids, but it also means 1,114
+  values covering 376,264 uid-appearances never get to link anyone --
+  dominated by generic device strings (`Windows`: 18,535 appearances,
+  `iOS Device`: 12,719, `MacOS`: 8,344) and the most common
+  address+email/card-profile combinations. A larger `max_degree` would
+  catch a few more genuine large rings at the cost of risking the same
+  supercluster collapse; this project chose the safer side of that
+  trade-off. See `src/graph.py`'s module docstring for the full sweep.
+- **Calibration overconfidence exactly where the policy operates.** The
+  cluster model's Brier score (0.0200) looks fine in aggregate, but the
+  highest-score bin (mean predicted ~0.48 -- above both policy
+  thresholds) is overconfident by 0.13: predicted ~0.48, actual positive
+  rate ~0.35. `REVIEW_THRESHOLD=0.1843` should be read as an arbitrary cut
+  on the model's score scale, not "we estimate >18.43% abuse risk." See
+  results/ablation.md's Calibration section.
 - **Clusters have no ground truth.** There is no "this is a real
-  coordinated ring" label anywhere in this dataset to validate cluster
-  correctness against. Everything reported here is *feature lift* --
-  whether adding cluster-derived features improves a fraud classifier's
-  ranking and cost metrics on a temporal holdout -- not *ring-detection
-  accuracy*. A cluster with a high fraud-history feature might be one
-  coordinated ring, several unrelated people who happen to share a
-  fingerprint, or a mix of both; this project cannot currently tell those
-  apart, and doesn't claim to.
+  coordinated ring" label anywhere in this dataset. Everything reported
+  here is *feature lift* -- whether cluster-derived features improve a
+  fraud classifier's ranking and cost metrics on a temporal holdout -- not
+  *ring-detection accuracy*. `results/case_studies.md` inspects the 3
+  highest-priority clusters qualitatively and includes one flagged
+  explicitly as ambiguous/possibly a false positive on the linkage, rather
+  than swapped for a cleaner-looking example.
+- **The groundedness result is one run of 30 clusters.** The investigator
+  layer's hard-number-grounding rule measured 100% (0 of 182 extracted
+  claims ungrounded) against real `claude-sonnet-4-6` output -- see
+  results/investigator_eval.md -- but that's one clean run, not a
+  permanent guarantee. The check should keep running on every future
+  re-run, not be treated as settled.

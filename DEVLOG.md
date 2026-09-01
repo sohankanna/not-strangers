@@ -1168,3 +1168,28 @@ run (the styling fix from Task 1+2 was still in flight when this was
 first written, so the first capture predated it slightly; a second run
 after that edit landed produced the final, correct screenshots, confirmed
 by inspecting all three images before committing).
+
+## 2026-09-01 — Task 4: README rewrite -- results first
+
+Restructured per the session's spec: one-sentence description, results
+table with the 84%-lift disclosure stated before the reader gets to
+celebrate the headline number, both reproduce commands (`python -m
+src.run_pipeline` and `make results`, with the Windows caveat about make
+not being present stated plainly rather than assumed away), setup
+(venv, data download, both Anthropic env vars with the workspace-id
+failure mode named explicitly so a future reader recognizes the symptom
+instead of re-discovering it), an architecture summary that states the
+ML/LLM/policy separation as a structural fact with its own verification
+(AST check + behavioral test), screenshots, and all seven limitations
+the task asked for expanded (label noise's interaction with the dominant
+feature, uid over-merging, the ~11% unresolvable rows and their higher
+fraud rate, max_degree=20 and what it excludes, calibration
+overconfidence of 0.13, no ground truth, and the groundedness result
+being one run of 30 clusters, not a permanent guarantee).
+
+Every number in it was copied from an already-verified results/ artifact
+or DEVLOG entry, not recomputed or re-derived for this rewrite -- nothing
+new to check here beyond making sure the transcription matched the
+source exactly, which it does (diffed by eye against results/ablation.md,
+results/investigator_eval.md, results/uid_validation.md, and
+results/d1_investigation.md while writing).
