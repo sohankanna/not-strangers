@@ -338,3 +338,72 @@ NaN almost everywhere. graph.py's own `_prepare()` helper already does this
 correctly (that's precisely why it exists as a shared helper rather than
 being repeated inline) -- the bug was only in my scratch investigation code,
 not in the module being tested.
+
+## 2026-08-31 — Task 2: model.py + run_pipeline.py implemented, ablation produced
+
+model.py: train_baseline_model and train_cluster_model both call the same
+private _fit() helper -- literally the same code path, same LGBM_PARAMS
+dict (seed=42), same NUM_BOOST_ROUND=300 -- so the only way the two models
+can differ is which columns are in X. build_feature_matrix drops isFraud
+and a raw "uid" column if present, deliberately: the cluster model gets the
+engineered cluster STATISTICS, never the raw uid string, so it can't just
+memorize "this exact uid was fraud in training" instead of learning from
+the aggregated signal -- that would inflate the ablation for reasons
+unrelated to the cluster features actually being tested. 4 tests in
+tests/test_model.py, including one that runs both training functions on
+identical data and asserts the resulting boosters serialize identically
+(`model_to_string()` equal) -- proving "identical treatment" structurally,
+not just by eyeballing the params dict.
+
+run_pipeline.py: load_and_prepare -> train_both_models -> evaluate_both_
+models -> write_ablation_report, plus main(). Exposed as importable
+functions (not just a __main__ script) so Task 3/4's scripts can reuse the
+same data/graph/model artifacts without copy-pasting this orchestration.
+Graph is built once from train-only data (max_degree=20, per Task 1's
+finding) and cluster features are computed once with
+as_of=test_df["TransactionDT"].min() -- the first test-period timestamp --
+then broadcast from per-uid to per-TransactionID and left-joined onto both
+train and test rows. Rows with no uid (~11%, see uid_validation.md) or a
+uid with no pre-as_of history simply get NaN cluster columns via that
+left-join -- never dropped, never a fabricated zero, exactly as instructed.
+Policy.py is NOT called from here (out of scope this session, per
+instructions) -- updated run_pipeline's module docstring accordingly since
+the original scaffold-stub sequence included an apply_policy step.
+
+**Result on the real full-scale temporal split** (472,432 train /
+118,108 test rows, cost_fn=500, cost_fp=5, both illustrative and stated as
+such in ablation.md):
+
+| model | PR-AUC | Recall @ 1% FPR | Cost per 10k |
+|---|---:|---:|---:|
+| baseline | 0.5646 | 0.4791 | 30,078.40 |
+| cluster | 0.6322 | 0.5576 | 26,155.72 |
+
++0.0676 PR-AUC, +0.0785 recall@1%FPR, -3,922.68 cost per 10k. This is not a
+small or marginal lift -- reported as-is, nothing was adjusted after seeing
+it.
+
+**What surprised me, and it needs Task 3 before anyone should believe it:**
+`cluster_prior_fraud_share`'s feature-gain is 558,334 -- about 9x the
+*second*-place feature (V258 at 63,550) and roughly 20x most others. That
+single feature dominating this heavily is exactly the shape of a leak, even
+though the unit-level leakage test in test_graph.py (future fraud-labeled
+transaction must not change any feature) already passed. A passing unit
+test on a small synthetic case proves the *mechanism* filters as_of
+correctly; it doesn't by itself prove there's no leak at the *full-pipeline*
+level (e.g. in how as_of is chosen, or in what "prior" means across the
+train/test boundary in aggregate). Not fixing or second-guessing this
+number now -- Task 3 is specifically the trace-it-and-report-plainly step,
+next.
+
+Runtime at full scale, for the record: ~35s to load data + build the graph
++ compute cluster features, ~58s to train both models. Cheap enough that
+Task 3/4 can just re-run load_and_prepare()/train_both_models() fresh
+rather than needing to cache artifacts to disk.
+
+**Got wrong and corrected:** first cut of build_feature_matrix used
+`select_dtypes(include="object")`, which raised a Pandas4Warning in
+pandas 3.0.5 about "str" dtype columns being swept in implicitly under
+"object" and that becoming an error in a future pandas version. Fixed by
+being explicit: `include=["object", "str"]`. Caught by the model.py unit
+tests before it ever touched the real 434-column dataset.
