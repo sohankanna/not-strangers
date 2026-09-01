@@ -188,3 +188,34 @@ Full detail, including the linkage rules and the batch/inline split, is in
   results/investigator_eval.md -- but that's one clean run, not a
   permanent guarantee. The check should keep running on every future
   re-run, not be treated as settled.
+
+## Mapping to production
+
+This project's features are IEEE-CIS's own card-network columns, not
+anything Razorpay-specific -- the mapping below is illustrative of what a
+real Indian payments stack's fields are analogous to, not a description of
+any actual system. `card1` (and the rest of the `card1`-`card6` family) is
+closest to a tokenized payment instrument identifier; `DeviceInfo` is
+closest to a device fingerprint a client-side SDK would emit; `addr1` (a
+coarse numeric region code) is closest to a pincode or region field; and
+`P_emaildomain` is closest to a customer contact identity -- an email
+domain here, where a real onboarding flow might use a verified phone
+number or email instead. Just as tellingly, this dataset has no equivalent
+for several signals a real coordinated-abuse detector would likely lean
+on: a VPA handle, the UPI PSP a transaction routed through, a
+cash-on-delivery flag, a merchant category code, or a shipping address
+distinct from the billing one.
+
+What changes under UPI is the label itself, not just the features. This
+project's fraud label is chargeback-reported and propagates across a
+card once one transaction on it is disputed (see CLAUDE.md and the
+Limitations note above) -- UPI has no equivalent chargeback mechanism, so
+that label source doesn't carry over. The nearest real substitutes would
+be merchant-reported fraud and RTO/return-abuse signals (exploiting
+delivery and return flows rather than disputing a card payment), and both
+come from a different actor on a different timeline than a card network's
+dispute process: label latency (how long before a transaction's true
+status is known) and label noise (how much to trust a label once it
+arrives) would both look different under UPI, likely in ways that need
+their own measurement rather than an assumption that this project's
+noise characteristics carry over unchanged.

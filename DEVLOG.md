@@ -1484,3 +1484,25 @@ non-prior-fraud lift doesn't reliably survive a different temporal
 boundary (Task 3). None of these are contradictions or bugs -- they're
 what you find when you go looking for a second measurement instead of
 resting on the first one.
+
+## 2026-09-01 -- Task 4: mapping to production, without pretending to know Razorpay's internals
+
+**What was built.** A "Mapping to production" section in README.md, two
+paragraphs, no code. First: what IEEE-CIS's columns are analogous to in a
+real Indian payments stack -- `card1` to a tokenized instrument,
+`DeviceInfo` to a client-SDK device fingerprint, `addr1` to a pincode/
+region code, `P_emaildomain` to a customer contact identity -- and what
+this dataset has no equivalent for: a VPA handle, the UPI PSP a
+transaction routed through, a COD flag, merchant category, a shipping
+address distinct from billing. Second: what changes under UPI --
+there's no chargeback mechanism, so the label source this project trains
+on (chargeback-reported, card-propagating) has no direct analog; the
+nearest substitutes (merchant-reported fraud, RTO/return-abuse signals)
+come from a different actor on a different timeline, which changes both
+label latency and label noise.
+
+**What I was careful about.** The section opens by stating plainly that
+this mapping is illustrative of a generic Indian payments stack, not a
+description of Razorpay's actual systems -- nothing here claims internal
+knowledge this project doesn't have. No code, no new claims about the
+pipeline's own numbers, and nothing in src/ touched.
