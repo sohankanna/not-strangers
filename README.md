@@ -31,6 +31,10 @@ signal. The remaining structural/graph features -- edge density, velocity,
 burst concentration, email heterogeneity, cluster size -- contribute a
 smaller but genuine residual lift on their own. See Limitations below.
 
+## Queue-level evaluation
+
+Base rate: 1.8% of qualifying test-split multi-uid clusters contain at least one fraud transaction. At K=50, the priority ranking's precision@k is 0.0600 vs. 0.1000 for the mean-score baseline -- a naive mean-score baseline (no cluster features at all) beats the system's priority ranking on precision@k at 3 of 4 K values tested -- reported as a finding, not adjusted. Full breakdown across K=[10, 25, 50, 100], both rankings, and the methodology are in [results/queue_eval.md](results/queue_eval.md).
+
 ## Reproduce
 
 ```

@@ -1285,3 +1285,61 @@ the README's Reproduce section actually rely on. Not a regression and not
 fixed this session (installing system `make` isn't a code change); the
 README states this plainly rather than assuming `make` is universally
 available, per Task 4.
+
+## 2026-09-01 -- Task 7: queue-level precision@k, and a real null result
+
+**What was built.** `scripts/eval_queue.py` -> `results/queue_eval.md`.
+Every reported number up to now (results/ablation.md) is transaction-level
+PR-AUC -- a proxy for "does the model rank individual transactions well,"
+not "would an analyst working a queue of flagged *clusters* actually find
+real abuse near the top." This closes that gap: on the test split only
+(no retraining, no feature recomputation -- reuses
+`run_pipeline.load_and_prepare()`/`train_both_models()` exactly like every
+other results/*.md artifact), restricted to multi-uid clusters (2+
+members, the same population case_studies.md and app.py use) with at
+least one test-period transaction, for K in [10, 25, 50, 100]:
+precision@k, fraud transactions surfaced, workload (test transactions an
+analyst would review), and the resulting efficiency ratio -- computed for
+two rankings. Ranking A is the actual system ordering
+(`investigator.build_evidence` + `investigator._priority_score`, the exact
+same call app.py's `build_cluster_queue` makes, over each cluster's full
+train+test history). Ranking B is a deliberately dumb baseline: clusters
+ranked by the mean of the *baseline* model's (txn features only, zero
+cluster signal anywhere in training) per-transaction score across a
+cluster's test-period members -- no cluster topology, no
+`cluster_prior_fraud_share`, nothing graph-derived at all.
+
+**What surprised me.** The baseline beat the priority ranking at 3 of the
+4 K values (K=100 tied), not narrowly: precision@10 is 0.40 for the
+baseline vs. 0.20 for priority; precision@50 is 0.10 vs. 0.06. I expected
+the system's own ranking to at least match a naive baseline, since it's
+built from features that measurably lift transaction-level PR-AUC
+(results/ablation.md). It doesn't, and thinking about *why* is more
+useful than the number itself: `_priority_score` weights
+`cluster_prior_fraud_share` 100x -- "has this cluster's history ever
+included fraud" -- which is a backward-looking, largely static signal per
+cluster. A cluster whose members were flagged long ago and haven't done
+anything since sits at the top of the priority queue indefinitely. The
+baseline's mean transaction score has no memory like that -- it only
+reacts to what a cluster's members are doing *right now*, in the test
+window, which is exactly the thing precision@k on *test-period* fraud is
+measuring. The same feature that drives 84% of the PR-AUC lift
+(README.md's "read the third row before the first one" caveat) is the
+one dragging the cluster-priority ordering down here. Same feature, two
+different jobs, and it's good at one and not the other.
+
+**What the numbers actually say.** Base rate: only 9 of 494 qualifying
+clusters (1.8%) contain any test-period fraud at all -- both rankings are
+working against a genuinely sparse target, and every precision@k number
+has to be read against that 1.8%, not in isolation (both easily clear it,
+for what that's worth). Reported the loss as-is in both
+results/queue_eval.md and the new README section -- no reweighting of
+`_priority_score`, no swapping which model backs the baseline, no
+after-the-fact justification softened into the verdict text. This is a
+legitimate finding about where the cluster-graph apparatus does and
+doesn't help: it was built and validated against transaction-level
+PR-AUC, and that lift does not transfer to being a better cluster-queue
+ordering than just averaging a plain transaction classifier's scores.
+`policy.py`/`evaluate.py` and every existing results/*.md number are
+untouched -- this is a new, additive measurement, not a revision of the
+submission's headline.
