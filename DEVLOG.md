@@ -593,3 +593,37 @@ success case, but has never actually been exercised against the real API
 in this session. If a key is added later, re-running
 scripts/eval_investigator.py is what would produce a real measurement of
 the LLM's groundedness under the prompt.
+
+## 2026-08-31 — Task 2: measured the investigator, confirmed the caveat from Task 1
+
+scripts/eval_investigator.py -> results/investigator_eval.md. Selected 30
+clusters spanning the risk range (all multi-uid clusters from the train
+graph sorted by cluster_prior_fraud_share, 30 evenly-spaced percentile
+points -- not just the top 30 riskiest, so low-risk and ambiguous clusters
+are represented too, e.g. cluster-13 above with prior_fraud_share=0.0).
+Groundedness check extracts every numeric literal from each narrative via
+regex and checks it against the cluster's evidence dict, allowing rounding
+to 0-4 decimals and percentage form (v cited as v*100).
+
+**Result: 100% groundedness (0 of 360 extracted claims ungrounded), and
+this number is exactly as uninformative as flagged in Task 1's DEVLOG
+entry.** ANTHROPIC_API_KEY is still not set, so all 30 explanations took
+the fallback path (source=ungrounded-fallback for every single one --
+confirmed, not assumed, by checking the `sources` counter in the script's
+output). The fallback template is grounded by construction (it's built by
+directly formatting evidence dict values as `key=value` pairs), so 100%
+was the only possible outcome here, not evidence that claude-sonnet-4-6
+follows the hard-number-rule prompt. Said this plainly in
+investigator_eval.md's first paragraph rather than reporting "100%
+groundedness!" as if it validated the LLM.
+
+What this task DID validate, honestly: the selection-and-measurement
+*pipeline* itself works end to end -- risk-spanning cluster selection,
+evidence assembly, narrative generation, numeric extraction, and grounding
+comparison all ran correctly on real data (30 real clusters, real evidence
+values, e.g. cluster-29's prior_fraud_share=1.0 with only 3 members and 7
+transactions -- a small, high-confidence cluster). If a key is added, this
+same script is what would need to be re-run for the number that actually
+matters.
+
+No corrections needed this task -- ran cleanly on the first attempt.
