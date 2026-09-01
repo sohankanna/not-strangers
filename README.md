@@ -24,9 +24,13 @@ cross-split breakdown: [results/ablation.md](results/ablation.md),
 
 ## Screenshots
 
-| Review queue | Cluster detail (entity graph + MODEL/SHAP attribution) |
+| Review queue | Cluster 74986 -- entity graph (a real ring; red = fraud-labelled uid) |
 |---|---|
-| ![Review queue](docs/screenshot_queue.png) | ![Cluster detail](docs/screenshot_detail.png) |
+| ![Review queue](docs/screenshot_queue.png) | ![Cluster detail, entity graph](docs/screenshot_detail.png) |
+
+| Score attribution -- SHAP + transaction-vs-cluster split | Live replay -- mid-playback, a cluster just crossed REVIEW_THRESHOLD |
+|---|---|
+| ![Score attribution](docs/screenshot_shap.png) | ![Live replay, mid-playback](docs/screenshot_replay.png) |
 
 | Model performance |
 |---|

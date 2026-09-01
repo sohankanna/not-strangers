@@ -1960,3 +1960,49 @@ instead; `get_by_role("button", name="Reset")` collides with Plotly's own
 "Reset axes" modebar button and needs `exact=True`.)
 
 57/57 tests still pass; `git diff --stat -- src/ results/` is empty.
+
+## 2026-09-01 — README screenshots refreshed, three new views added
+
+`scripts/capture_screenshots.py` now produces five images instead of
+three: the existing queue and performance shots (regenerated fresh, so
+the queue screenshot's tab bar now correctly shows Live replay as a
+fourth tab), plus cluster 74986's entity graph on its own (a real 3-uid
+ring, one node fraud-coloured -- picked because a 3-node ring reads
+clearly, unlike a 27-member cluster's dense blob), the SHAP
+score-attribution panel for that same cluster (transaction-vs-cluster
+split included), and the Live replay tab mid-playback, paused just after
+cluster 769's real REVIEW_THRESHOLD crossing so its LLM narrative panel
+is visible.
+
+Two things worth recording because they weren't obvious going in:
+
+- **The detail view's content sits inside a fixed-height inner
+  container.** `page.screenshot(full_page=True)` produced byte-identical
+  output to `full_page=False` at the same viewport -- confirmed by
+  diffing, not assumed -- meaning anything below the Evidence panel
+  (the Transaction timeline chart) was never actually being captured by
+  the prior script either, viewport scroll capture just silently didn't
+  reach it. Worked around by cropping one 1700x2200 capture with PIL at
+  measured y-boundaries for the graph and SHAP sub-images, rather than
+  trying to scroll or full-page-capture further down.
+- **The replay tab's scored-feed table clipped its rightmost (action)
+  column at 1700px width**, cutting a word in the narrative below it
+  mid-crop on a first attempt at a fixed-pixel fix (caught by re-reading
+  the cropped image before committing, not by assuming the crop was
+  safe). Fixed properly: widen to 2000px only for that one tab, then
+  auto-detect the true content bounding box (both the tallest row and
+  the widest column with real content) from the actual pixels instead of
+  hardcoding a crop rectangle, so it isn't fragile to the narrative's
+  length or the feed table's column widths varying run to run.
+
+Row-selection is still the fragile part (see the module docstring):
+cluster 74986 is reached by a raw pixel click at a canvas offset found
+empirically, not by any DOM lookup, since the queue is a canvas-rendered
+grid with no queryable cell text. Two capture runs this session found
+the row-selection log line's own `heading.inner_text()` check racy (it
+reported "no heading appeared" once even though the actual screenshot
+came out correct) -- the screenshot itself, not that log line, is the
+real check, and was verified visually both times.
+
+No frozen pipeline file touched; only `scripts/capture_screenshots.py`,
+`docs/*.png`, and `README.md` changed. 57/57 tests pass.
