@@ -807,3 +807,45 @@ call rather than a number -- worth being honest that "plausible true
 positive" and "ambiguous" are reads, not measurements, and the report says
 so in its own closing section rather than implying more precision than 3
 manually-inspected clusters out of 1,567 can support.
+
+## 2026-08-31 — Task 7 (part 1): wired everything into run_pipeline.py
+
+Moved the artifact-generation logic from scripts/sanity_checks.py,
+cost_curve.py, calibration.py, eval_investigator.py, write_audit_sample.py
+and benchmark.py into src/run_pipeline.py as reusable functions
+(write_sanity_checks, write_cost_curve, write_calibration,
+write_investigator_eval, write_audit_sample, write_benchmark), all called
+from one main() after a single load_and_prepare()/train_both_models() pair
+-- previously each of the 7 artifacts independently re-loaded the 683MB
+CSV and re-trained both models, ~90s of pure redundant setup per script.
+Each scripts/*.py file is now a thin wrapper delegating to the
+corresponding run_pipeline function, kept for standalone use (`python
+scripts/cost_curve.py` still works).
+
+**Verification that nothing's numbers changed in the move:** backed up the
+committed results/ artifacts, ran the new consolidated `python -m
+src.run_pipeline`, and diffed. results/ablation.md: byte-identical.
+results/cost_curve.png, results/calibration.png: identical MD5. 
+results/investigator_eval.md: one line differs, purely cosmetic wording
+("Re-run this script" -> "Re-run this", since the text moved from a
+script's own docstring into a shared function that isn't only reachable
+from a script anymore) -- zero numbers changed. results/audit_sample.jsonl:
+0 of 200 records differ once the timestamp field (which is supposed to
+differ -- it's wall-clock time of the run) is excluded from the
+comparison.
+
+**Got wrong and corrected before committing:** results/ablation.md's
+sections are safe to re-append repeatedly because write_ablation_report
+always regenerates the whole file fresh first -- but ARCHITECTURE.md has
+no equivalent "start fresh" step, and write_benchmark was a straight
+unconditional append. Running the consolidated pipeline once revealed
+`ARCHITECTURE.md` had gained a SECOND "## Performance" section (grep count:
+2). This is exactly the kind of bug the reproducibility check in part 2 of
+this task is supposed to catch -- `make results` needs to be safe to run
+more than once, and it wasn't. Fixed with a `_remove_section()` helper that
+strips a heading through to the next top-level heading before
+re-appending, applied to both the ARCHITECTURE.md path and (defensively)
+`_append_to_ablation`'s per-section appends. Verified the fix by running
+the full pipeline twice in a row and confirming exactly one "## Performance"
+section and one each of the three ablation.md subsections both times, with
+identical model metrics both runs.

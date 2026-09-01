@@ -1,6 +1,6 @@
 # Investigator evaluation
 
-ANTHROPIC_API_KEY was **NOT set** when this ran. Explanation sources: {'ungrounded-fallback': 30}. **Every explanation below took the deterministic fallback path (source=ungrounded-fallback), not the real LLM.** The fallback narrative is built by directly formatting the evidence dict's own values, so it is grounded by construction -- the groundedness rate below measures that template, not claude-sonnet-4-6's actual behavior under the prompt's hard rule. Re-run this script with a real key for an honest measurement of the LLM path.
+ANTHROPIC_API_KEY was **NOT set** when this ran. Explanation sources: {'ungrounded-fallback': 30}. **Every explanation below took the deterministic fallback path (source=ungrounded-fallback), not the real LLM.** The fallback narrative is built by directly formatting the evidence dict's own values, so it is grounded by construction -- the groundedness rate below measures that template, not claude-sonnet-4-6's actual behavior under the prompt's hard rule. Re-run this with a real key for an honest measurement of the LLM path.
 
 Evaluated 30 clusters, selected to span the risk range: sorted all multi-uid clusters (2+ members) by cluster_prior_fraud_share, then took 30 evenly-spaced percentile points across that sorted list (not just the top 30 riskiest).
 

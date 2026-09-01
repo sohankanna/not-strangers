@@ -4,8 +4,8 @@ Batch/inline split, stated plainly: graph construction and cluster feature compu
 
 ### Batch: graph construction and cluster features
 
-- Graph construction (472,432 train-period transactions, max_degree=20): **2.67s** (167,111 nodes, 62,804 edges)
-- Cluster feature computation (167,111 uids): **12.45s**
+- Graph construction (472,432 train-period transactions, max_degree=20): **2.53s** (167,111 nodes, 62,804 edges)
+- Cluster feature computation (167,111 uids): **13.31s**
 
 ### Inline: per-transaction scoring latency
 
@@ -13,17 +13,17 @@ Batch/inline split, stated plainly: graph construction and cluster feature compu
 
 | stat | value |
 |---|---:|
-| p50_ms | 32.833 ms |
-| p95_ms | 37.300 ms |
-| p99_ms | 39.474 ms |
-| mean_ms | 32.996 ms |
-| max_ms | 42.482 ms |
+| p50_ms | 31.786 ms |
+| p95_ms | 33.649 ms |
+| p99_ms | 34.432 ms |
+| mean_ms | 31.029 ms |
+| max_ms | 43.111 ms |
 
 This is single-row prediction, not batched -- LightGBM's per-call overhead dominates at this granularity, so p95 here is a meaningfully worse number than the model's throughput in bulk scoring would suggest. A real inline path would likely batch several in-flight requests if the volume justified it.
 
 ### What would need to change at ~1B transactions/quarter
 
-This benchmark's full graph build (472,432 transactions) took 2.67s for construction + 12.45s for features. ~1B transactions/quarter is roughly 2117x this benchmark's train set. Naive linear scaling alone would already push a full rebuild from seconds into hours, and the real cost is worse than linear: this project's own hub-guard investigation (graph.py's module docstring) found that the graph's structure is sensitive to `max_degree` in a highly non-linear way (a phase transition, not a smooth curve) -- at greater scale, more identifier values cross the hub threshold, and getting this wrong risks the same giant-component collapse found in Task 1 of the previous session, at a much more expensive scale to detect and recover from.
+This benchmark's full graph build (472,432 transactions) took 2.53s for construction + 13.31s for features. ~1B transactions/quarter is roughly 2117x this benchmark's train set. Naive linear scaling alone would already push a full rebuild from seconds into hours, and the real cost is worse than linear: this project's own hub-guard investigation (graph.py's module docstring) found that the graph's structure is sensitive to `max_degree` in a highly non-linear way (a phase transition, not a smooth curve) -- at greater scale, more identifier values cross the hub threshold, and getting this wrong risks the same giant-component collapse found earlier this project, at a much more expensive scale to detect and recover from.
 
 Three changes this scale would require, none implemented here:
 
