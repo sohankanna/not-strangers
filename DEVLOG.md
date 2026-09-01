@@ -1343,3 +1343,44 @@ ordering than just averaging a plain transaction classifier's scores.
 `policy.py`/`evaluate.py` and every existing results/*.md number are
 untouched -- this is a new, additive measurement, not a revision of the
 submission's headline.
+
+## 2026-09-01 -- Task 1: queue_eval.md was technically correct and still misleading
+
+**What was corrected.** The previous entry's report (results/queue_eval.md)
+stated a true fact -- the baseline beats the priority ranking at 3 of 4
+K values -- in a way that asserted more confidence than 9 positive
+clusters can support, and it buried the actually-good news. Fixed in
+`scripts/eval_queue.py` (not hand-edited into the .md -- the report is
+still generated, never hand-typed, same discipline as every other
+results/*.md file here): every precision@k figure now carries its
+absolute count (e.g. "0.4000 (4/10)"), its lift over the 1.8% base rate
+(e.g. "22.0x"), and a parallel recall@k column (of the 9 fraud-containing
+clusters, how many appear in the top K). The Verdict section now states a
+noise caveat explicitly -- a gap of 3 clusters or fewer, which is true at
+all 4 K values tested here, is called out as indistinguishable from
+chance with only 9 positives -- before restating the null finding, more
+precisely worded: the priority score is behind or tied at 4 of 4 K
+values, *and* the sample can't confirm that's a real gap. Neither half
+alone was the honest statement.
+
+**What changed, concretely.** Precision@10 (0.40 baseline / 0.20
+priority) now reads as 22x / 11x base rate, respectively, and the report
+now says plainly that both rankings clearing an order of magnitude over
+random is the headline finding, not something to skip past on the way to
+the A-vs-B comparison. That comparison hadn't changed -- the underlying
+numbers are identical to Task 7's run -- only how honestly the report
+described what those numbers could and couldn't support.
+
+**What surprised me.** How easy it was to write a "reported honestly"
+paragraph last session that was still one-sided: I didn't invent
+anything or hide the loss, but by leading with "the baseline beats the
+priority ranking" without immediately pairing it with "and that gap is 2
+clusters out of 9, which is noise," the framing did the reader's
+statistical reasoning for them, in the wrong direction. Getting a null
+result reported honestly turned out to require more than not lying about
+the direction of the result -- it required stating the uncertainty
+around it in the same sentence, not a paragraph later. Fixed the
+`_results_table` header to derive the "9" from `total_positives` at
+runtime rather than a literal I'd typed while drafting the wording,
+before it could become the next hardcoded-number bug this project has
+already hit twice.

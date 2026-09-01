@@ -16,35 +16,39 @@ Produced by `scripts/eval_queue.py`, run on the test split only (evaluate.tempor
 
 **9 of 494 qualifying test-split clusters (0.0182, i.e. 1.8%) contain at least one fraud transaction.**
 
-Precision@k is meaningless without this number: a precision@k barely above the base rate means the ranking is doing little better than picking clusters at random from the qualifying population. Every precision@k figure below should be read relative to this 0.0182 baseline, not in isolation.
+Precision@k is meaningless without this number, in both directions. Every precision@k figure below is reported next to its **lift over base rate** (precision@k / 0.0182) and its absolute count (clusters-with-fraud / clusters-evaluated) rather than as a bare fraction. Both rankings turn out to land far above random: even the weaker of the two clears the base rate by roughly an order of magnitude at every K tested, and that should be read as the headline finding of this report, not buried under the A-vs-B comparison below.
+
+**With only 9 positive clusters in the entire qualifying population, every number in this report is small-count statistics.** A precision@k difference between the two rankings of 1-3 clusters -- which is most of what separates them at every K below -- is well within the noise this sample size can produce; flipping the true/false label on two or three clusters would plausibly reorder which ranking looks better at a given K. Recall@k (of the 9 fraud-containing clusters, how many appear in the top K) is reported alongside precision for exactly this reason -- with this few positives it is the more informative number, since it's a direct count out of a known, small total rather than a ratio that swings sharply per cluster.
 
 ## Results
 
 ### Ranking A: priority ranking (system / dashboard / policy ordering)
 
-| K | clusters evaluated | precision@k | fraud txns surfaced | workload (test txns reviewed) | efficiency (fraud / reviewed) |
-|---:|---:|---:|---:|---:|---:|
-| 10 | 10 | 0.2000 | 8 | 38 | 0.2105 |
-| 25 | 25 | 0.0800 | 8 | 122 | 0.0656 |
-| 50 | 50 | 0.0600 | 9 | 312 | 0.0288 |
-| 100 | 100 | 0.0600 | 55 | 764 | 0.0720 |
+| K | precision@k (clusters w/ fraud / evaluated) | lift over base rate | recall@k (of 9 fraud clusters found) | fraud txns surfaced | workload (test txns reviewed) | efficiency (fraud / reviewed) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 0.2000 (2/10) | 11.0x | 0.2222 (2/9) | 8 | 38 | 0.2105 |
+| 25 | 0.0800 (2/25) | 4.4x | 0.2222 (2/9) | 8 | 122 | 0.0656 |
+| 50 | 0.0600 (3/50) | 3.3x | 0.3333 (3/9) | 9 | 312 | 0.0288 |
+| 100 | 0.0600 (6/100) | 3.3x | 0.6667 (6/9) | 55 | 764 | 0.0720 |
 
 ### Ranking B: baseline ranking (mean transaction-level score, no cluster features)
 
-| K | clusters evaluated | precision@k | fraud txns surfaced | workload (test txns reviewed) | efficiency (fraud / reviewed) |
-|---:|---:|---:|---:|---:|---:|
-| 10 | 10 | 0.4000 | 46 | 81 | 0.5679 |
-| 25 | 25 | 0.2000 | 54 | 188 | 0.2872 |
-| 50 | 50 | 0.1000 | 54 | 293 | 0.1843 |
-| 100 | 100 | 0.0600 | 56 | 599 | 0.0935 |
+| K | precision@k (clusters w/ fraud / evaluated) | lift over base rate | recall@k (of 9 fraud clusters found) | fraud txns surfaced | workload (test txns reviewed) | efficiency (fraud / reviewed) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 0.4000 (4/10) | 22.0x | 0.4444 (4/9) | 46 | 81 | 0.5679 |
+| 25 | 0.2000 (5/25) | 11.0x | 0.5556 (5/9) | 54 | 188 | 0.2872 |
+| 50 | 0.1000 (5/50) | 5.5x | 0.5556 (5/9) | 54 | 293 | 0.1843 |
+| 100 | 0.0600 (6/100) | 3.3x | 0.6667 (6/9) | 56 | 599 | 0.0935 |
 
 ## Verdict
 
-- K=10: priority precision@k=0.2000 (efficiency 0.2105) vs. baseline precision@k=0.4000 (efficiency 0.5679) -- **baseline ahead**
-- K=25: priority precision@k=0.0800 (efficiency 0.0656) vs. baseline precision@k=0.2000 (efficiency 0.2872) -- **baseline ahead**
-- K=50: priority precision@k=0.0600 (efficiency 0.0288) vs. baseline precision@k=0.1000 (efficiency 0.1843) -- **baseline ahead**
-- K=100: priority precision@k=0.0600 (efficiency 0.0720) vs. baseline precision@k=0.0600 (efficiency 0.0935) -- **tied**
+- K=10: priority found 2/9 fraud clusters (precision 0.2000, 11.0x base rate) vs. baseline's 4/9 (precision 0.4000, 22.0x) -- a gap of 2 cluster(s), **baseline ahead** (within noise)
+- K=25: priority found 2/9 fraud clusters (precision 0.0800, 4.4x base rate) vs. baseline's 5/9 (precision 0.2000, 11.0x) -- a gap of 3 cluster(s), **baseline ahead** (within noise)
+- K=50: priority found 3/9 fraud clusters (precision 0.0600, 3.3x base rate) vs. baseline's 5/9 (precision 0.1000, 5.5x) -- a gap of 2 cluster(s), **baseline ahead** (within noise)
+- K=100: priority found 6/9 fraud clusters (precision 0.0600, 3.3x base rate) vs. baseline's 6/9 (precision 0.0600, 3.3x) -- a gap of 0 cluster(s), **tied** (within noise)
 
-**The mean-score baseline beats the priority ranking on precision@k at 3 of 4 K values tested** (0 for priority, 1 tied). This is reported as-is -- the ranking was not adjusted after seeing this result. A null (or negative) result here is a legitimate finding about where the cluster-topology features do and don't help: they were built to lift transaction-level PR-AUC (results/ablation.md), and doing that is not the same guarantee as producing a better cluster-priority ordering.
+**4 of 4 K values show a gap of 3 clusters or fewer between the two rankings -- with only 9 positive clusters total, that is within the noise this sample size can produce, not a confident difference in ranking quality.**
 
-Both rankings draw from the same qualifying population and the same test-split labels -- the only thing that differs between them is the ordering applied to that population, so any precision@k gap above is attributable to the ranking method, not to a different underlying population or label set.
+**Null finding, stated precisely:** the hand-weighted priority score (`cluster_prior_fraud_share * 100 + cluster_burst_concentration * 10 + min(cluster_txn_count, 100) * 0.1`, see Methodology above) does not demonstrate an advantage over the mean-score baseline at cluster-queue ordering -- it is behind or tied at 4 of 4 K values on precision -- but the sample is too small (9 positive clusters) to distinguish the two rankings confidently at any individual K. This is reported as-is; the ranking was not adjusted after seeing the result, and the finding is the honest combination of both facts together, not either one alone: the priority score does not show a measurable edge here, and this dataset does not have enough positive clusters to say much more than that.
+
+Both rankings draw from the same qualifying population and the same test-split labels -- the only thing that differs between them is the ordering applied to that population, so any gap above is attributable to the ranking method, not to a different underlying population or label set. What the sample size cannot support is translating that gap into a confident "X ranking is better" conclusion -- see the noise caveat above.

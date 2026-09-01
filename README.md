@@ -33,7 +33,7 @@ smaller but genuine residual lift on their own. See Limitations below.
 
 ## Queue-level evaluation
 
-Base rate: 1.8% of qualifying test-split multi-uid clusters contain at least one fraud transaction. At K=50, the priority ranking's precision@k is 0.0600 vs. 0.1000 for the mean-score baseline -- a naive mean-score baseline (no cluster features at all) beats the system's priority ranking on precision@k at 3 of 4 K values tested -- reported as a finding, not adjusted. Full breakdown across K=[10, 25, 50, 100], both rankings, and the methodology are in [results/queue_eval.md](results/queue_eval.md).
+Base rate: 1.8% of qualifying test-split multi-uid clusters contain at least one fraud transaction (9 of 494). Both rankings land far above that: at K=50, precision@k is 0.0600 (3.3x base rate) for the system's priority ranking vs. 0.1000 (5.5x) for a naive mean-score baseline with no cluster features at all -- the priority ranking is behind or tied at 4 of 4 K values tested, but with only 9 fraud-containing clusters in the whole population, that gap is mostly within the noise this sample size can produce (4 of 4 K values show a difference of 3 clusters or fewer). Full breakdown -- precision@k, recall@k, lift over base rate, and the noise caveat -- is in [results/queue_eval.md](results/queue_eval.md).
 
 ## Reproduce
 

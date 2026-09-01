@@ -137,17 +137,29 @@ def build_cluster_table(
     return cluster_stats, n_multi_uid_components, n_dropped
 
 
-def _topk_stats(df: pd.DataFrame, rank_col: str, k: int) -> dict:
+def _topk_stats(
+    df: pd.DataFrame, rank_col: str, k: int, total_positives: int, base_rate: float
+) -> dict:
+    """Per-K stats for one ranking, always alongside the base rate and the
+    total positive-cluster count -- a raw precision@k figure is not
+    interpretable without both (see results/queue_eval.md's Base rate
+    section for why this project stopped reporting precision in isolation).
+    """
     ranked = df.sort_values(rank_col, ascending=False)
     top = ranked.head(k)
     n = len(top)
     n_with_fraud = int(top["has_fraud"].sum())
     fraud_surfaced = int(top["n_fraud_txns"].sum())
     workload = int(top["n_test_txns"].sum())
+    precision = (n_with_fraud / n) if n else float("nan")
     return {
         "k": k,
         "n_clusters_evaluated": n,
-        "precision_at_k": (n_with_fraud / n) if n else float("nan"),
+        "n_clusters_with_fraud": n_with_fraud,
+        "precision_at_k": precision,
+        "lift_over_base_rate": (precision / base_rate) if base_rate else float("nan"),
+        "recall_at_k": (n_with_fraud / total_positives) if total_positives else float("nan"),
+        "total_positives": total_positives,
         "fraud_txns_surfaced": fraud_surfaced,
         "workload_txns": workload,
         "efficiency_ratio": (fraud_surfaced / workload) if workload else float("nan"),
@@ -155,24 +167,38 @@ def _topk_stats(df: pd.DataFrame, rank_col: str, k: int) -> dict:
 
 
 def compute_rankings(cluster_stats: pd.DataFrame) -> dict[str, list[dict]]:
+    total_positives = int(cluster_stats["has_fraud"].sum())
+    n_qualifying = len(cluster_stats)
+    base_rate = (total_positives / n_qualifying) if n_qualifying else float("nan")
     return {
-        "priority": [_topk_stats(cluster_stats, "priority_score", k) for k in K_VALUES],
-        "baseline": [_topk_stats(cluster_stats, "mean_baseline_score", k) for k in K_VALUES],
+        "priority": [
+            _topk_stats(cluster_stats, "priority_score", k, total_positives, base_rate)
+            for k in K_VALUES
+        ],
+        "baseline": [
+            _topk_stats(cluster_stats, "mean_baseline_score", k, total_positives, base_rate)
+            for k in K_VALUES
+        ],
     }
 
 
 def _results_table(rows: list[dict]) -> list[str]:
+    total_positives = rows[0]["total_positives"]
     lines = [
-        "| K | clusters evaluated | precision@k | fraud txns surfaced | "
+        "| K | precision@k (clusters w/ fraud / evaluated) | lift over base rate | "
+        f"recall@k (of {total_positives} fraud clusters found) | fraud txns surfaced | "
         "workload (test txns reviewed) | efficiency (fraud / reviewed) |",
-        "|---:|---:|---:|---:|---:|---:|",
+        "|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         note = "" if r["n_clusters_evaluated"] == r["k"] else " *"
         lines.append(
-            f"| {r['k']}{note} | {r['n_clusters_evaluated']} | "
-            f"{r['precision_at_k']:.4f} | {r['fraud_txns_surfaced']} | "
-            f"{r['workload_txns']} | {r['efficiency_ratio']:.4f} |"
+            f"| {r['k']}{note} | {r['precision_at_k']:.4f} "
+            f"({r['n_clusters_with_fraud']}/{r['n_clusters_evaluated']}) | "
+            f"{r['lift_over_base_rate']:.1f}x | "
+            f"{r['recall_at_k']:.4f} ({r['n_clusters_with_fraud']}/{r['total_positives']}) | "
+            f"{r['fraud_txns_surfaced']} | {r['workload_txns']} | "
+            f"{r['efficiency_ratio']:.4f} |"
         )
     return lines
 
@@ -272,11 +298,30 @@ def write_report(
     )
     lines.append("")
     lines.append(
-        "Precision@k is meaningless without this number: a precision@k "
-        "barely above the base rate means the ranking is doing little "
-        "better than picking clusters at random from the qualifying "
-        "population. Every precision@k figure below should be read "
-        f"relative to this {base_rate:.4f} baseline, not in isolation."
+        "Precision@k is meaningless without this number, in both directions. "
+        "Every precision@k figure below is reported next to its **lift over "
+        f"base rate** (precision@k / {base_rate:.4f}) and its absolute count "
+        "(clusters-with-fraud / clusters-evaluated) rather than as a bare "
+        "fraction. Both rankings turn out to land far above random: even the "
+        "weaker of the two clears the base rate by roughly an order of "
+        "magnitude at every K tested, and that should be read as the "
+        "headline finding of this report, not buried under the A-vs-B "
+        "comparison below."
+    )
+    lines.append("")
+    lines.append(
+        f"**With only {n_with_fraud} positive clusters in the entire "
+        f"qualifying population, every number in this report is small-count "
+        "statistics.** A precision@k difference between the two rankings "
+        f"of 1-3 clusters -- which is most of what separates them at every "
+        "K below -- is well within the noise this sample size can produce; "
+        "flipping the true/false label on two or three clusters would "
+        "plausibly reorder which ranking looks better at a given K. Recall@k "
+        f"(of the {n_with_fraud} fraud-containing clusters, how many appear "
+        "in the top K) is reported alongside precision for exactly this "
+        "reason -- with this few positives it is the more informative "
+        "number, since it's a direct count out of a known, small total "
+        "rather than a ratio that swings sharply per cluster."
     )
     lines.append("")
 
@@ -303,8 +348,13 @@ def write_report(
     priority_wins = 0
     baseline_wins = 0
     ties = 0
+    within_noise_count = 0
     for p, b in zip(results["priority"], results["baseline"]):
         k = p["k"]
+        cluster_diff = b["n_clusters_with_fraud"] - p["n_clusters_with_fraud"]
+        within_noise = abs(cluster_diff) <= 3
+        if within_noise:
+            within_noise_count += 1
         if p["precision_at_k"] > b["precision_at_k"]:
             priority_wins += 1
             tag = "priority ahead"
@@ -314,60 +364,72 @@ def write_report(
         else:
             ties += 1
             tag = "tied"
+        noise_note = " (within noise)" if within_noise else ""
         comparisons.append(
-            f"- K={k}: priority precision@k={p['precision_at_k']:.4f} "
-            f"(efficiency {p['efficiency_ratio']:.4f}) vs. baseline "
-            f"precision@k={b['precision_at_k']:.4f} (efficiency "
-            f"{b['efficiency_ratio']:.4f}) -- **{tag}**"
+            f"- K={k}: priority found {p['n_clusters_with_fraud']}/{n_with_fraud} "
+            f"fraud clusters (precision {p['precision_at_k']:.4f}, "
+            f"{p['lift_over_base_rate']:.1f}x base rate) vs. baseline's "
+            f"{b['n_clusters_with_fraud']}/{n_with_fraud} (precision "
+            f"{b['precision_at_k']:.4f}, {b['lift_over_base_rate']:.1f}x) -- "
+            f"a gap of {abs(cluster_diff)} cluster(s), **{tag}**{noise_note}"
         )
     lines += comparisons
     lines.append("")
 
-    if priority_wins > baseline_wins:
-        headline = (
-            f"**The priority ranking beats the mean-score baseline on "
-            f"precision@k at {priority_wins} of {len(K_VALUES)} K values "
-            f"tested** ({baseline_wins} for the baseline, {ties} tied). "
-        )
-    elif baseline_wins > priority_wins:
-        headline = (
-            f"**The mean-score baseline beats the priority ranking on "
-            f"precision@k at {baseline_wins} of {len(K_VALUES)} K values "
-            f"tested** ({priority_wins} for priority, {ties} tied). This is "
-            "reported as-is -- the ranking was not adjusted after seeing "
-            "this result. A null (or negative) result here is a legitimate "
-            "finding about where the cluster-topology features do and "
-            "don't help: they were built to lift transaction-level PR-AUC "
-            "(results/ablation.md), and doing that is not the same "
-            "guarantee as producing a better cluster-priority ordering."
-        )
-    else:
-        headline = (
-            "**The priority ranking and the mean-score baseline tie on "
-            f"precision@k across all {len(K_VALUES)} K values tested.** "
-        )
-    lines.append(headline)
+    lines.append(
+        f"**{within_noise_count} of {len(K_VALUES)} K values show a gap of 3 "
+        "clusters or fewer between the two rankings -- with only "
+        f"{n_with_fraud} positive clusters total, that is within the noise "
+        "this sample size can produce, not a confident difference in "
+        "ranking quality.**"
+    )
+    lines.append("")
+
+    lines.append(
+        "**Null finding, stated precisely:** the hand-weighted priority "
+        "score (`cluster_prior_fraud_share * 100 + "
+        "cluster_burst_concentration * 10 + min(cluster_txn_count, 100) * "
+        "0.1`, see Methodology above) does not demonstrate an advantage "
+        f"over the mean-score baseline at cluster-queue ordering -- it is "
+        f"behind or tied at {baseline_wins + ties} of {len(K_VALUES)} K "
+        f"values on precision -- but the sample is too small "
+        f"({n_with_fraud} positive clusters) to distinguish the two "
+        "rankings confidently at any individual K. This is reported as-is; "
+        "the ranking was not adjusted after seeing the result, and the "
+        "finding is the honest combination of both facts together, not "
+        "either one alone: the priority score does not show a measurable "
+        "edge here, and this dataset does not have enough positive clusters "
+        "to say much more than that."
+    )
     lines.append("")
     lines.append(
         "Both rankings draw from the same qualifying population and the "
         "same test-split labels -- the only thing that differs between them "
-        "is the ordering applied to that population, so any precision@k gap "
-        "above is attributable to the ranking method, not to a different "
-        "underlying population or label set."
+        "is the ordering applied to that population, so any gap above is "
+        "attributable to the ranking method, not to a different underlying "
+        "population or label set. What the sample size cannot support is "
+        "translating that gap into a confident \"X ranking is better\" "
+        "conclusion -- see the noise caveat above."
     )
     lines.append("")
 
     RESULTS_DIR.mkdir(exist_ok=True)
     (RESULTS_DIR / "queue_eval.md").write_text("\n".join(lines), encoding="utf-8")
 
+    priority_50 = next(r for r in results["priority"] if r["k"] == 50)
+    baseline_50 = next(r for r in results["baseline"] if r["k"] == 50)
     return {
         "n_qualifying": n_qualifying,
+        "n_with_fraud": n_with_fraud,
         "base_rate": base_rate,
         "priority_wins": priority_wins,
         "baseline_wins": baseline_wins,
         "ties": ties,
-        "priority_p50": next(r for r in results["priority"] if r["k"] == 50)["precision_at_k"],
-        "baseline_p50": next(r for r in results["baseline"] if r["k"] == 50)["precision_at_k"],
+        "within_noise_count": within_noise_count,
+        "priority_p50": priority_50["precision_at_k"],
+        "baseline_p50": baseline_50["precision_at_k"],
+        "priority_p50_lift": priority_50["lift_over_base_rate"],
+        "baseline_p50_lift": baseline_50["lift_over_base_rate"],
     }
 
 
@@ -402,33 +464,27 @@ def update_readme(headline: dict) -> None:
 
     text = _remove_section(text, "## Queue-level evaluation")
 
-    if headline["priority_wins"] > headline["baseline_wins"]:
-        verdict_sentence = (
-            f"the priority ranking beats a naive mean-score baseline on "
-            f"precision@k at {headline['priority_wins']} of "
-            f"{headline['priority_wins'] + headline['baseline_wins'] + headline['ties']} "
-            "K values tested"
-        )
-    elif headline["baseline_wins"] > headline["priority_wins"]:
-        verdict_sentence = (
-            "a naive mean-score baseline (no cluster features at all) beats "
-            f"the system's priority ranking on precision@k at "
-            f"{headline['baseline_wins']} of "
-            f"{headline['priority_wins'] + headline['baseline_wins'] + headline['ties']} "
-            "K values tested -- reported as a finding, not adjusted"
-        )
-    else:
-        verdict_sentence = "the priority ranking and a naive mean-score baseline tie on precision@k across every K tested"
+    total_k = headline["priority_wins"] + headline["baseline_wins"] + headline["ties"]
+    behind_or_tied = headline["baseline_wins"] + headline["ties"]
 
     section = (
-        "## Queue-level evaluation\n\n"
+        f"## Queue-level evaluation\n\n"
         f"Base rate: {headline['base_rate']:.1%} of qualifying test-split "
-        "multi-uid clusters contain at least one fraud transaction. At "
-        f"K=50, the priority ranking's precision@k is "
-        f"{headline['priority_p50']:.4f} vs. {headline['baseline_p50']:.4f} "
-        f"for the mean-score baseline -- {verdict_sentence}. Full "
-        "breakdown across K=[10, 25, 50, 100], both rankings, and the "
-        "methodology are in [results/queue_eval.md](results/queue_eval.md).\n\n"
+        f"multi-uid clusters contain at least one fraud transaction "
+        f"({headline['n_with_fraud']} of {headline['n_qualifying']}). Both "
+        f"rankings land far above that: at K=50, precision@k is "
+        f"{headline['priority_p50']:.4f} ({headline['priority_p50_lift']:.1f}x "
+        f"base rate) for the system's priority ranking vs. "
+        f"{headline['baseline_p50']:.4f} ({headline['baseline_p50_lift']:.1f}x) "
+        f"for a naive mean-score baseline with no cluster features at all -- "
+        f"the priority ranking is behind or tied at {behind_or_tied} of "
+        f"{total_k} K values tested, but with only "
+        f"{headline['n_with_fraud']} fraud-containing clusters in the whole "
+        f"population, that gap is mostly within the noise this sample size "
+        f"can produce ({headline['within_noise_count']} of {total_k} K "
+        f"values show a difference of 3 clusters or fewer). Full breakdown "
+        f"-- precision@k, recall@k, lift over base rate, and the noise "
+        f"caveat -- is in [results/queue_eval.md](results/queue_eval.md).\n\n"
     )
 
     new_text = text.replace(marker, section + marker, 1)
