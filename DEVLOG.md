@@ -1056,3 +1056,92 @@ This also means the bug fixed two entries ago is now confirmed fixed
 end-to-end, not just plausible in theory: the workspace-id header was the
 actual blocker, and with it in place the same code path that produced 30
 silent failures now produces 30 real, grounded explanations.
+
+## 2026-09-01 — Task 1+2: Streamlit dashboard (app.py) + dark theme
+
+Committed together rather than split: the CSS is embedded directly in
+app.py (there's no separate "logic" version that ever existed without
+styling), so artificially splitting them into two commits would mean
+reconstructing a fake unstyled intermediate just for git history's sake,
+which helps no one. Both tasks are genuinely done, documented together
+honestly.
+
+Three tabs: Review queue (cluster list ranked by investigator.py's
+priority_score, selectable, with a detail panel showing the LLM narrative,
+evidence table, member uids, a transaction timeline, and the policy
+decision + threshold), Model performance (ablation table, cost curve,
+calibration -- all parsed from results/ablation.md at runtime), Audit
+trail (results/audit_sample.jsonl, filterable by action). Dark theme via
+.streamlit/config.toml (near-black #0D0D0F base) plus custom CSS injected
+via st.markdown for anything the theme config can't reach (fonts,
+monospace numerics, risk badges).
+
+**Real problems found and fixed while building this, in the order they
+were hit:**
+
+1. **Queue-building took minutes, not seconds.** First version looped
+   `investigator.build_evidence` + `_priority_score` + `policy.decide`
+   over every one of the ~1,500+ multi-uid clusters with test-period
+   activity, each iteration doing a `.loc` fancy-index lookup against a
+   ~199k-row cluster_features table. Caught by literally watching it hang
+   for minutes with the server still alive and the log not moving.
+   Rewrote as two passes: a fully vectorized pass (groupby `.count()`,
+   `.map()` against a Series -- no per-cluster Python callback) to find a
+   bounded candidate pool of 400 by a cheap proxy
+   (`cluster_prior_fraud_share`, the dominant term in the real priority
+   formula anyway), then the exact, non-vectorizable investigator/policy
+   calls only on that bounded pool. Seconds instead of minutes, same
+   numbers for every cluster that ends up in the displayed queue.
+
+2. **A visibly empty bordered box between the policy-decision line and
+   the LLM narrative.** Root cause: `st.markdown('<div class="panel">')`
+   opened in one call, with the label/content/closing `</div>` issued in
+   *separate* `st.markdown` calls after it. Each `st.markdown` call is its
+   own independent HTML fragment in Streamlit -- an unclosed `<div>` in
+   one call does not wrap content from a later call, so the "open" div
+   rendered as its own empty, styled, bordered rectangle, and the actual
+   content became unrelated sibling elements that happened to look
+   plausible next to it. Fixed by building the whole panel's HTML as one
+   f-string and issuing it in a single `st.markdown` call. Checked the
+   rest of the file for the same pattern (grep for every `st.markdown`
+   call with raw HTML) -- this was the only instance.
+
+3. **A hardcoded number, caught by looking at my own screenshot.** The
+   Model performance tab's caption said "roughly 84% of the headline
+   PR-AUC lift (+0.0676 full vs. +0.0110 without it)" as a literal string
+   -- correct today, but exactly the kind of thing this session's own
+   instruction ("never invent a number... every figure must be read from
+   results/ at runtime") was written to prevent, since it would go
+   silently stale if the underlying numbers ever changed. Fixed to compute
+   the share and both deltas from the already-parsed ablation table at
+   render time.
+
+4. **Streamlit's rerun-vs-runOnSave behavior isn't what I assumed.**
+   While testing, I edited app.py *while a capture run was already
+   executing* against the previous version, expecting the running
+   subprocess to keep using the old in-memory code (`runOnSave=false` in
+   config.toml). It didn't: a widget-triggered rerun (clicking a queue
+   row) picked up the edited file mid-run, producing a screenshot with
+   the new styling despite being launched before the edit. Streamlit
+   re-reads the script from disk on every rerun regardless of
+   `runOnSave` -- that setting only controls whether the file watcher
+   *automatically* triggers a rerun without user interaction (showing a
+   "File change / Rerun" banner instead). Didn't affect correctness here,
+   but worth knowing: don't trust that a long-running dev-server subprocess
+   is still running the code you started it with.
+
+Chose a hand-rolled HTML table (`render_html_table`) over `st.dataframe`
+for the evidence/ablation/audit tables specifically to get monospace,
+right-aligned, consistent-decimal numerics -- `st.dataframe`'s grid
+(glide-data-grid) renders to canvas and can't be reached by CSS at the
+per-cell level. `st.dataframe` is used only for the one place true
+row-selection interactivity is required (the queue), with a pandas Styler
+for the risk-colored action column (`.style.map`, confirmed it renders
+correctly rather than assumed).
+
+Verified live with a real running server + Playwright screenshots at each
+step (not just "it compiles") -- all three tabs, row selection, the
+narrative/policy attribution, the action-column coloring, and the
+error/empty states were each checked against an actual screenshot before
+moving on, per this session's own instruction to test UI changes in a
+browser rather than claim success from type-checking alone.
