@@ -717,3 +717,45 @@ catch -- a single scalar metric that looks fine in aggregate while hiding
 a real problem in the one region that actually matters for the thing being
 built. Caught here by looking at the plot before trusting the number, not
 by a test (there's no unit test for "did I pick a misleading metric").
+
+## 2026-08-31 — Task 5: latency and scale benchmark
+
+scripts/benchmark.py measures three things separately and appends a
+Performance section to ARCHITECTURE.md (previously empty since the
+original scaffold): graph construction (2.67s for 472,432 train-period
+transactions at max_degree=20 -- consistent with earlier ad-hoc timings
+from Task 1's investigation), cluster feature computation (12.45s for
+167,111 uids), and per-transaction inline scoring latency over 1,000 real
+sampled test transactions (feature-store lookup + single-row
+model.predict): p50=32.8ms, p95=37.3ms, p99=39.5ms.
+
+Stated the batch/inline split plainly, as asked: graph construction and
+cluster features are batch (never on the request path); scoring is inline,
+assuming cluster features are already sitting in a lookup (simulated here
+as a plain dict keyed by uid, built once from pipeline_data.cluster_features
+-- not a pandas .loc on the full frame, since that's not what a real
+feature-store read would look like).
+
+Worth noting honestly: 32-37ms for a single LightGBM prediction is slower
+than "just call predict()" might suggest, because the benchmark includes
+the realistic cost of assembling a correctly-ordered, correctly-typed
+442-column row (432 baseline + 10 cluster columns, several categorical) on
+every call, including an explicit column reindex to guarantee exact
+alignment with what the model was trained on -- this is genuinely part of
+the inline cost, not overhead added by the benchmark, but a real system
+would likely keep a pre-allocated schema rather than reassembling it per
+request, which this number doesn't capture.
+
+~1B transactions/quarter is ~2117x this benchmark's train set. Named three
+concrete changes that scale would require, none implemented (this is a
+performance write-up, not new engineering): incremental graph updates
+instead of full rebuilds, approximate connected components, and sharding
+across machines (with the real problem there being cross-shard edges, not
+just storage). Also connected this forward to Task 1 of the previous
+session's finding: max_degree's effect on cluster size is a phase
+transition, not a smooth curve, which makes "just re-tune it at higher
+volume" a riskier proposition than it sounds.
+
+No corrections needed -- ran cleanly on the first attempt, including the
+column-reindex safeguard added proactively before running rather than
+discovered by a crash.
