@@ -680,3 +680,40 @@ suite.
 No corrections needed this task -- the two threshold sweeps and the audit
 script all ran cleanly on the first attempt, likely because the sweep
 methodology was already proven out in Task 4 of the previous session.
+
+## 2026-08-31 — Task 4: calibration -- Brier score looked fine, the region that matters didn't
+
+scripts/calibration.py: reliability curve (quantile-binned, 15 bins --
+equal-width bins would dump almost everything into one bin given the
+~3.5% base rate) plus Brier score, appended to results/ablation.md. No
+retraining, no recalibration -- read-only measurement, as instructed.
+
+**Got wrong and corrected before it shipped:** first pass computed a
+single equally-weighted "mean absolute gap across bins" (0.0111) and used
+`mean_abs_gap < 0.02` as the sole calibration verdict, concluding
+"reasonably well calibrated." Looking at the actual plot before writing
+that up: 14 of the 15 bins sit at very low predicted scores (below ~0.09)
+where the model is naturally well-calibrated (predicting near-zero for a
+mostly-zero outcome is the easy part), and the single highest-score bin --
+mean predicted 0.4795, which is above BOTH policy.py thresholds
+(STEP_UP_THRESHOLD=0.0103, REVIEW_THRESHOLD=0.1843) -- has an observed
+positive rate of only 0.3509, a 0.13 gap. An equally-weighted average
+across bins buries that one bad bin under fourteen easy ones. Rewrote the
+verdict to be driven by the highest-score bin specifically (the region
+closest to where the policy actually operates) rather than the blanket
+average, and reported both numbers with the reasoning for why the average
+is the wrong one to trust here.
+
+**Verdict, correctly this time: not well calibrated where it matters,
+despite a low Brier score (0.0200 vs. 0.0332 for a base-rate-only
+predictor).** REVIEW_THRESHOLD should be read as an arbitrary cut on the
+score scale, not "we estimate >18.43% abuse risk" -- scores up there
+systematically overstate true risk. Noted isotonic/Platt scaling as the
+fix, explicitly not implemented (model.py frozen, and the task said not to
+retrain).
+
+This is exactly the kind of mistake the whole session is structured to
+catch -- a single scalar metric that looks fine in aggregate while hiding
+a real problem in the one region that actually matters for the thing being
+built. Caught here by looking at the plot before trusting the number, not
+by a test (there's no unit test for "did I pick a misleading metric").

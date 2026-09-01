@@ -146,3 +146,18 @@ results/cost_curve.png sweeps score thresholds directly (not relying on the cali
 
 Worth being explicit about: the cost-minimizing FPR here is 37%-38% -- a direct, correct mathematical consequence of the assumed 100:1 cost_fn:cost_fp ratio (missing fraud is assumed to be that much worse than a false alarm, so the optimum flags aggressively), not a bug. In practice this means stepping up upwards of a third of all legitimate transactions at the "optimal" point -- whether that's acceptable is a business call the assumed cost ratio drives entirely; a less aggressive cost ratio (or a friction budget constraint) would move the chosen threshold and the resulting FPR substantially.
 
+## Calibration
+
+results/calibration.png -- reliability curve for the cluster model on the test split (quantile-binned, since scores concentrate near 0 at this base rate; equal-width bins would put almost everything in one bin).
+
+![Reliability curve](calibration.png)
+
+- Brier score: **0.0200** (lower is better; a model that always
+  predicts the test-set base rate 0.0344 scores 0.0332 for comparison)
+- Mean absolute gap between observed and predicted fraction, equally weighted across the 15 bins: **0.0111** -- this number is misleading on its own, see below.
+- Highest-score bin (mean predicted score 0.4795, the bin nearest where policy.py's thresholds actually operate): observed fraction of positives is **0.3509**, a gap of **-0.1286**.
+
+**The equally-weighted average is misleading here and would say the wrong thing if reported alone.** Most of the 15 bins sit at very low predicted scores, where a ~3.5%-base-rate model is naturally easy to calibrate (predicting near 0 for mostly-0 outcomes), so they pull the average down. The bin that actually matters for policy.py -- the highest one, mean predicted score 0.4795, which is above both STEP_UP_THRESHOLD (0.0103) and REVIEW_THRESHOLD (0.1843) -- is **overconfident by 0.13** (predicts ~0.48, actual positive rate is only 0.35).
+
+**Verdict: not well calibrated in the region the policy engine actually operates in, despite a low overall Brier score.** policy.py's REVIEW_THRESHOLD (0.1843) should be read as an arbitrary cut on this model's score scale, not as "we estimate >18.43% abuse risk" -- scores in this upper range systematically overstate the true positive rate. The fix, if a true probability is needed, is isotonic or Platt scaling fit on a held-out calibration slice -- **not implemented here**: model.py is frozen this session, and refitting a calibration map changes how scores are produced, which is not something to add quietly under a task that explicitly said do not retrain the model.
+
