@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 970" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9A9AA5" />
+    </marker>
+    <style>
+      .box       { fill: #18181C; stroke: #2A2A2E; stroke-width: 1.5; }
+      .box-model { fill: #18181C; stroke: #4A9B8A; stroke-width: 2; }
+      .box-frozen{ fill: #18181C; stroke: #2A2A2E; stroke-width: 1.5; }
+      .box-policy{ fill: #18181C; stroke: #9A9AA5; stroke-width: 2; }
+      .box-llm   { fill: #18181C; stroke: #5B7FBF; stroke-width: 2; }
+      .title     { fill: #E4E4E7; font-size: 23px; font-weight: 700; text-anchor: middle; }
+      .subtitle  { fill: #9A9AA5; font-size: 13px; text-anchor: middle; }
+      .note      { fill: #9A9AA5; font-size: 12px; font-style: italic; }
+      .modname   { fill: #E4E4E7; font-size: 17px; font-weight: 700; text-anchor: middle; }
+      .mono      { fill: #9A9AA5; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-anchor: middle; }
+      .desc      { fill: #E4E4E7; font-size: 12.5px; text-anchor: middle; }
+      .desc-sm   { fill: #E4E4E7; font-size: 11.5px; text-anchor: middle; }
+      .tag-model { fill: #4A9B8A; font-size: 10.5px; font-weight: 700; text-anchor: end; letter-spacing: 0.5px; }
+      .tag-frozen{ fill: #9A9AA5; font-size: 10.5px; font-weight: 700; text-anchor: end; letter-spacing: 0.5px; }
+      .tag-policy{ fill: #9A9AA5; font-size: 10.5px; font-weight: 700; text-anchor: end; letter-spacing: 0.5px; }
+      .tag-llm   { fill: #5B7FBF; font-size: 10.5px; font-weight: 700; text-anchor: end; letter-spacing: 0.5px; }
+      .divider   { stroke: #2A2A2E; stroke-width: 1.5; stroke-dasharray: 5,5; }
+      .arrowline { stroke: #9A9AA5; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .legend    { fill: #9A9AA5; font-size: 12px; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="970" fill="#0D0D0F" />
+
+  <text x="500" y="36" class="title">not-strangers — pipeline architecture</text>
+  <text x="500" y="58" class="subtitle">every arrow is a real function call in src/*.py — see ARCHITECTURE.md</text>
+
+  <rect x="40" y="72" width="920" height="828" rx="14" fill="none" class="divider" stroke="#2A2A2E" />
+  <text x="60" y="98" class="note">run_pipeline.py orchestrates every stage below — none of src/*.py import each other's orchestration logic</text>
+
+  <!-- Data source -->
+  <rect x="250" y="118" width="500" height="56" rx="8" class="box" />
+  <text x="500" y="140" class="desc" font-weight="600">train_transaction.csv + train_identity.csv</text>
+  <text x="500" y="160" class="desc-sm" fill="#9A9AA5">raw IEEE-CIS data, left-joined on TransactionID (~24% identity coverage)</text>
+
+  <path d="M500,174 L500,196" class="arrowline" />
+
+  <!-- entities.py -->
+  <rect x="250" y="196" width="500" height="80" rx="8" class="box" />
+  <text x="500" y="220" class="modname">entities.py</text>
+  <text x="500" y="242" class="mono">resolve_entities()</text>
+  <text x="500" y="262" class="desc">→ uid = card1_addr1_origin_day (persistent client identity)</text>
+
+  <path d="M500,276 L500,298" class="arrowline" />
+
+  <!-- graph.py -->
+  <rect x="250" y="298" width="500" height="118" rx="8" class="box" />
+  <text x="500" y="322" class="modname">graph.py</text>
+  <text x="500" y="342" class="mono">build_entity_graph(train_df, ..., max_degree=20)</text>
+  <text x="500" y="362" class="desc">→ uids linked by shared device / addr+email / card+bank+addr</text>
+  <text x="500" y="382" class="mono">compute_cluster_features(..., as_of=test.min())</text>
+  <text x="500" y="402" class="desc">→ 10 per-uid cluster features, computed causally</text>
+
+  <path d="M500,416 L500,438" class="arrowline" />
+
+  <!-- model.py -->
+  <rect x="250" y="438" width="500" height="82" rx="8" class="box-model" />
+  <text x="735" y="458" class="tag-model">MODEL</text>
+  <text x="500" y="462" class="modname">model.py</text>
+  <text x="500" y="484" class="mono">train_baseline_model() / train_cluster_model()</text>
+  <text x="500" y="504" class="desc">→ identical params &amp; seed — only the feature columns differ</text>
+
+  <path d="M500,520 L500,542" class="arrowline" />
+
+  <!-- evaluate.py -->
+  <rect x="250" y="542" width="500" height="82" rx="8" class="box-frozen" />
+  <text x="735" y="562" class="tag-frozen">FROZEN</text>
+  <text x="500" y="566" class="modname">evaluate.py</text>
+  <text x="500" y="588" class="mono">evaluate_model()</text>
+  <text x="500" y="608" class="desc">→ PR-AUC / recall@1%FPR / cost-per-10k — never edited to improve numbers</text>
+
+  <path d="M500,624 L500,648" class="arrowline" />
+
+  <!-- fork -->
+  <path d="M500,648 L277,671" class="arrowline" />
+  <path d="M500,648 L723,671" class="arrowline" />
+
+  <!-- policy.py -->
+  <rect x="90" y="672" width="375" height="102" rx="8" class="box-policy" />
+  <text x="443" y="692" class="tag-policy">POLICY · DECIDES</text>
+  <text x="277.5" y="696" class="modname">policy.py</text>
+  <text x="277.5" y="718" class="mono">decide(entity_id, model_score, ...)</text>
+  <text x="277.5" y="738" class="desc">→ allow / step_up / review</text>
+  <text x="277.5" y="758" class="desc-sm" fill="#9A9AA5">thresholds: STEP_UP 0.0103 / REVIEW 0.1843</text>
+
+  <!-- investigator.py -->
+  <rect x="535" y="672" width="375" height="102" rx="8" class="box-llm" />
+  <text x="888" y="692" class="tag-llm">LLM · EXPLAINS</text>
+  <text x="722.5" y="696" class="modname">investigator.py</text>
+  <text x="722.5" y="718" class="mono">explain_cluster(cluster_features, txns)</text>
+  <text x="722.5" y="738" class="desc">→ LLM narrative + priority_score</text>
+  <text x="722.5" y="758" class="desc-sm" fill="#9A9AA5">never sees model_score — never decides</text>
+
+  <!-- separation divider -->
+  <line x1="500" y1="652" x2="500" y2="812" class="divider" />
+  <text x="500" y="830" text-anchor="middle" class="note" fill="#9A9AA5">no shared import between these two —</text>
+  <text x="500" y="846" text-anchor="middle" class="note" fill="#9A9AA5">checked both statically (AST) and behaviorally (tests/test_policy.py)</text>
+
+  <!-- legend -->
+  <rect x="180" y="924" width="14" height="14" fill="#4A9B8A" />
+  <text x="200" y="935" class="legend">MODEL — src/model.py's trained score</text>
+  <rect x="440" y="924" width="14" height="14" fill="#9A9AA5" />
+  <text x="460" y="935" class="legend">POLICY — deterministic decision</text>
+  <rect x="700" y="924" width="14" height="14" fill="#5B7FBF" />
+  <text x="720" y="935" class="legend">LLM — investigator.py narrative</text>
+</svg>

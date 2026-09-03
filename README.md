@@ -76,6 +76,8 @@ Run the dashboard: `streamlit run app.py`
 
 ## Architecture
 
+![Pipeline architecture](docs/architecture.svg)
+
 ```
 entities.py  --  resolve_entities()  ->  uid (persistent client identity)
       |

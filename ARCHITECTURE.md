@@ -2,6 +2,8 @@
 
 ## Pipeline overview
 
+![Pipeline architecture](docs/architecture.svg)
+
 ```
 train_transaction.csv + train_identity.csv
         |
