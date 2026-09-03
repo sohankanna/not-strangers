@@ -22,19 +22,41 @@ sign flips across splits). Full analysis, sanity checks and the
 cross-split breakdown: [results/ablation.md](results/ablation.md),
 [results/stability.md](results/stability.md).
 
-## Screenshots
+![Model performance tab: ablation table, feature importances, cost curve and calibration](docs/screenshot_performance.png)
 
-| Review queue | Cluster 74986 -- entity graph (a real ring; red = fraud-labelled uid) |
-|---|---|
-| ![Review queue](docs/screenshot_queue.png) | ![Cluster detail, entity graph](docs/screenshot_detail.png) |
+## The console
 
-| Score attribution -- SHAP + transaction-vs-cluster split | Live replay -- mid-playback, a cluster just crossed REVIEW_THRESHOLD |
-|---|---|
-| ![Score attribution](docs/screenshot_shap.png) | ![Live replay, mid-playback](docs/screenshot_replay.png) |
+A cluster of three uids, every one linked to every other. One carried a
+fraud-labelled transaction. The edge colour shows which linkage rule
+connected them -- here, shared `addr1` + email domain.
 
-| Model performance |
-|---|
-| ![Model performance](docs/screenshot_performance.png) |
+![Cluster detail showing the entity graph for cluster 74986](docs/screenshot_detail.png)
+
+Below the graph, the model's own reasoning: SHAP contributions in
+log-odds space, and the split between transaction-level and
+cluster-level features. For this cluster, 73% of the attribution
+magnitude comes from cluster features -- the project's core claim, made
+visible per decision. The LLM narrative sits beneath it, labelled with
+its source, and never touches the decision.
+
+![SHAP attribution panel and the LLM narrative beneath it](docs/screenshot_shap.png)
+
+The review queue ranks clusters by `investigator.py`'s priority score.
+The action column is `policy.py`'s real decision -- score against a
+fixed threshold -- which is a separate thing from the ranking, and the
+two can disagree. Cluster 121987 has 50 uids and gets `allow`; cluster
+74986 has 3 and gets `review`. That is the priority score being
+dominated by `cluster_prior_fraud_share`: a large group with no fraud
+history ranks below a small one that has it. See
+[results/queue_eval.md](results/queue_eval.md).
+
+![Review queue with clusters ranked by priority](docs/screenshot_queue.png)
+
+Live replay runs real held-out transactions through the pipeline in
+their actual timestamp order, building the entity graph as uids
+transact. Not simulated data.
+
+![Live replay tab mid-playback](docs/screenshot_replay.png)
 
 ## Queue-level evaluation
 
@@ -62,11 +84,11 @@ Run the dashboard: `streamlit run app.py`
 ## Setup
 
 1. **Python environment**
-   ```
+```
    python -m venv .venv
    .venv/Scripts/activate   # or .venv/bin/activate on macOS/Linux
    pip install -r requirements.txt
-   ```
+```
 2. **Data** -- `bash scripts/download_data.sh` (needs a Kaggle account and
    the `kaggle` CLI). Never committed to `data/`.
 3. **LLM layer (optional)** -- set `ANTHROPIC_API_KEY` for real
